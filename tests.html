@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cribbage tests</title>
+<style>
+  body { font: 14px/1.5 ui-monospace, Consolas, monospace; margin: 1rem; background: #111; color: #ddd; }
+  .fail { color: #ff7a7a; }
+  .pass { color: #8fd694; }
+</style>
+</head>
+<body>
+<h1 id="summary">Running…</h1>
+<pre id="out"></pre>
+<script type="module">
+import { parseCard, parseCards, cardName, shuffledDeck } from './js/cards.js';
+import { scoreHand, handPoints, pegScore, summarize } from './js/scoring.js';
+import { newGame, deal, discard, playCard, advanceShow, legalCards, skunk } from './js/game.js';
+import { rateDiscards, ratePlays, pickDiscard, pickPlay, hint } from './js/ai.js';
+import { emptyStats, loadStats, recordGame } from './js/stats.js';
+
+const results = [];
+const notes = [];
+
+function test(name, body) {
+  try {
+    body();
+    results.push({ name, ok: true });
+  } catch (error) {
+    results.push({ name, ok: false, error: error.message });
+  }
+}
+
+function equal(actual, expected, label = 'value') {
+  const a = JSON.stringify(actual);
+  const e = JSON.stringify(expected);
+  if (a !== e) throw new Error(`${label}: expected ${e}, got ${a}`);
+}
+
+function throws(body, label) {
+  try {
+    body();
+  } catch {
+    return;
+  }
+  throw new Error(`${label}: expected an error`);
+}
+
+// Small seeded generator so the self-play results are the same on every run.
+function seeded(seed) {
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// A deck that deals `zero` to seat 0, `one` to seat 1 and cuts `cut`.
+function stacked(zero, one, cut) {
+  const top = [...parseCards(zero), ...parseCards(one), parseCard(cut)];
+  return [...top, ...shuffledDeck().filter(c => !top.includes(c))];
+}
+
+function stackedGame(zero, one, cut, dealer = 0) {
+  const game = newGame({ mode: '2p' });
+  game.dealer = dealer;
+  deal(game, stacked(zero, one, cut));
+  return game;
+}
+
+// ---- Hand scoring -------------------------------------------------------
+
+const hands = [
+  ['5H 5D 5S JC', '5C', false, 29, 'the 29 hand'],
+  ['5H 5D 5S 5C', 'JC', false, 28, 'four fives with a Jack starter (no nobs)'],
+  ['4H 4D 5S 6C', '6D', false, 24, '4-4-5-6-6'],
+  ['7H 7D 8S 8C', '9D', false, 24, '7-7-8-8-9'],
+  ['2H 4D 6S 8C', '10D', false, 0, 'nothing'],
+  ['2H 4H 6H 8H', '10D', false, 4, 'four-card flush in hand'],
+  ['2H 4H 6H 8H', '10H', false, 5, 'five-card flush'],
+  ['2H 4H 6H 8H', '10D', true, 0, 'four-card flush does not count in the crib'],
+  ['2H 4H 6H 8H', '10H', true, 5, 'five-card flush in the crib'],
+  ['JH 2D 4S 6C', '8H', false, 1, 'nobs'],
+  ['2D 4S 6C 8H', 'JH', false, 0, 'Jack as starter is not nobs'],
+  ['3H 3D 4S 5C', 'KD', false, 12, 'double run'],
+  ['3H 3D 3S 4C', '5D', false, 21, 'triple run'],
+  ['3H 3D 4S 4C', '5D', false, 20, 'double double run'],
+  ['AH 2D 3S 4C', '5D', false, 7, 'run of five'],
+  ['6H 7D 8S 9C', 'KD', false, 8, 'run of four, not two runs of three'],
+];
+
+for (const [hand, starter, isCrib, expected, name] of hands) {
+  test(`hand: ${name}`, () => {
+    const cards = parseCards(hand);
+    equal(scoreHand(cards, parseCard(starter), isCrib).total, expected, 'scoreHand');
+    equal(handPoints(cards, parseCard(starter), isCrib), expected, 'handPoints');
+  });
+}
+
+test('hand: breakdown lines for the 29 hand', () => {
+  const { items } = scoreHand(parseCards('5H 5D 5S JC'), parseCard('5C'));
+  equal(summarize(items).map(line => [line.label.split(' (')[0], line.points]), [['8 fifteens', 16], ['6 pairs', 12], ['Nobs', 1]]);
+});
+
+test('hand: fast scorer agrees with the itemised scorer on 20,000 random hands', () => {
+  const random = seeded(1);
+  for (let i = 0; i < 20000; i++) {
+    const deck = shuffledDeck(random);
+    const isCrib = i % 2 === 0;
+    const slow = scoreHand(deck.slice(0, 4), deck[4], isCrib).total;
+    const fast = handPoints(deck.slice(0, 4), deck[4], isCrib);
+    if (slow !== fast) throw new Error(`${deck.slice(0, 5).map(cardName).join(' ')}: ${slow} vs ${fast}`);
+  }
+});
+
+// ---- Pegging ------------------------------------------------------------
+
+const plays = [
+  ['5H', 0, 'single card'],
+  ['7H 8D', 2, 'fifteen'],
+  ['KH 5D', 2, 'fifteen with a face card'],
+  ['4H 4D', 2, 'pair'],
+  ['4H 4D 4S', 6, 'pair royal'],
+  ['4H 4D 4S 4C', 12, 'double pair royal'],
+  ['KH QD JS AC', 2, 'thirty-one'],
+  ['3H 5D 4S', 3, 'run out of order'],
+  ['5H 3D 6S 4C', 4, 'run of four out of order'],
+  ['3H 4D 4S 5C', 0, 'pair breaks the run'],
+  ['2H 3D KS 4C', 0, 'interrupted run'],
+  ['AH 2D 3S 4C 5H', 7, 'run of five making fifteen'],
+  ['9H 6D 6S', 2, 'pair late in the count'],
+  ['5H 5D 5S', 8, 'pair royal making fifteen'],
+  ['6H 4D 5S', 5, 'run of three making fifteen'],
+  ['KH KD QS', 0, 'no run across a pair'],
+];
+
+for (const [stack, expected, name] of plays) {
+  test(`pegging: ${name}`, () => equal(pegScore(parseCards(stack)).points, expected));
+}
+
+// ---- Rules engine -------------------------------------------------------
+
+test('engine: a whole hand, with go, last card and the show', () => {
+  const game = stackedGame('KH KS 9H 9S 2C 3C', 'QD QC 8D 8C 2S 3S', '4C');
+  const dealsBefore = game.deals;
+  discard(game, 0, parseCards('2C 3C'));
+  equal(game.phase, 'discard', 'phase after one discard');
+  discard(game, 1, parseCards('2S 3S'));
+  equal([game.phase, game.turn, game.starter], ['play', 1, parseCard('4C')], 'after the cut');
+
+  const sequence = [[1, 'QD'], [0, 'KH'], [1, 'QC'], [0, 'KS'], [1, '8D'], [0, '9H'], [1, '8C'], [0, '9S']];
+  const goes = [];
+  for (const [player, card] of sequence) {
+    equal(game.turn, player, `turn before ${card}`);
+    playCard(game, player, parseCard(card));
+    for (const event of game.events) if (event.type === 'go') goes.push(event.player);
+  }
+  equal(goes, [0, 1], 'who said go');
+  equal(game.scores, [2, 1], 'pegging scores');
+  equal(game.phase, 'show', 'phase after pegging');
+
+  advanceShow(game);
+  equal([game.show.player, game.show.kind, game.show.total], [1, 'hand', 4], 'non-dealer shows first');
+  advanceShow(game);
+  equal([game.show.player, game.show.kind, game.show.total], [0, 'hand', 4], 'dealer hand');
+  advanceShow(game);
+  equal([game.show.player, game.show.kind, game.show.total], [0, 'crib', 16], 'crib');
+  equal(game.scores, [22, 5], 'scores after the show');
+  equal(game.back, [6, 1], 'trailing pegs');
+  equal(game.tally[0], { pegging: 2, hand: { count: 1, points: 4, best: 4 }, crib: { count: 1, points: 16, best: 16 } }, 'tally');
+
+  advanceShow(game);
+  equal([game.phase, game.dealer, game.deals - dealsBefore], ['discard', 1, 1], 'next deal goes to the other seat');
+  equal([game.hands[0].length, game.hands[1].length, game.crib.length], [6, 6, 0], 'fresh hands');
+});
+
+test('engine: a Jack starter gives the dealer two', () => {
+  const game = stackedGame('KH KS 9H 9S 2C 3C', 'QD QC 8D 8C 2S 3S', 'JH', 1);
+  discard(game, 0, parseCards('2C 3C'));
+  discard(game, 1, parseCards('2S 3S'));
+  equal(game.scores, [0, 2]);
+  equal(game.events.at(-1).reason, 'His heels');
+});
+
+test('engine: thirty-one with the last card scores two, not three', () => {
+  const game = stackedGame('KH KS 9H 9S 2C 3C', 'QD QC 8D 8C 2S 3S', '4C');
+  discard(game, 0, parseCards('2C 3C'));
+  discard(game, 1, parseCards('2S 3S'));
+  Object.assign(game, { hands: [[parseCard('AH')], []], stack: parseCards('KD QD JD'), count: 30, turn: 0 });
+  playCard(game, 0, parseCard('AH'));
+  equal([game.scores[0], game.phase], [2, 'show']);
+});
+
+test('engine: the game ends the moment a peg reaches the target', () => {
+  const game = stackedGame('KH KS 9H 9S 2C 3C', 'QD QC 8D 8C 2S 3S', '4C');
+  discard(game, 0, parseCards('2C 3C'));
+  discard(game, 1, parseCards('2S 3S'));
+  Object.assign(game, { scores: [120, 50], hands: [parseCards('5H 2C'), parseCards('KD')], stack: parseCards('KS'), count: 10, turn: 0 });
+  playCard(game, 0, parseCard('5H'));
+  equal([game.phase, game.winner, game.scores], ['over', 0, [121, 50]]);
+  equal(skunk(game), 2, 'double skunk');
+  throws(() => playCard(game, 1, parseCard('KD')), 'play after the game is over');
+});
+
+test('engine: illegal moves are refused', () => {
+  const game = stackedGame('KH KS 9H 9S 2C 3C', 'QD QC 8D 8C 2S 3S', '4C');
+  throws(() => discard(game, 0, parseCards('2C')), 'one card');
+  throws(() => discard(game, 0, parseCards('QD QC')), "the other seat's cards");
+  discard(game, 0, parseCards('2C 3C'));
+  throws(() => discard(game, 0, parseCards('KH KS')), 'second discard');
+  discard(game, 1, parseCards('2S 3S'));
+  throws(() => playCard(game, 0, parseCard('KH')), 'out of turn');
+  Object.assign(game, { count: 25 });
+  equal(legalCards(game, 1), [], 'nothing fits under 31');
+  throws(() => playCard(game, 1, parseCard('QD')), 'over 31');
+});
+
+// ---- Computer opponent and hints ---------------------------------------
+
+test('ai: keeps 5-5-10-J whoever owns the crib', () => {
+  const hand = parseCards('5H 5D 10S JC 2C 8D');
+  for (const isDealer of [true, false]) {
+    const best = rateDiscards(hand, isDealer)[0];
+    equal(best.toss.map(cardName).sort(), ['2♣', '8♦'], `dealer=${isDealer}`);
+    equal(best.now, 10, 'points kept');
+  }
+});
+
+test('ai: expected crib value matches brute force over every unseen draw', () => {
+  for (const text of ['JH 5H 9H KC 5S 2D', '7C 8C 8D AS 4H QD']) {
+    const hand = parseCards(text);
+    const unseen = [];
+    for (let c = 0; c < 52; c++) if (!hand.includes(c)) unseen.push(c);
+    for (const { toss, crib } of rateDiscards(hand, true)) {
+      let total = 0;
+      let n = 0;
+      for (let i = 0; i < unseen.length; i++) {
+        for (let j = i + 1; j < unseen.length; j++) {
+          for (let k = 0; k < unseen.length; k++) {
+            if (k === i || k === j) continue;
+            total += handPoints([...toss, unseen[i], unseen[j]], unseen[k], true);
+            n++;
+          }
+        }
+      }
+      if (Math.abs(total / n - crib) > 1e-9) throw new Error(`${toss.map(cardName).join(' ')}: ${total / n} vs ${crib}`);
+    }
+  }
+});
+
+function pegPosition(mine, theirs, stack, cut = '2D') {
+  const game = stackedGame('KH KS 9H 9S 2C 3C', 'QD QC 8D 8C 2S 3S', cut);
+  discard(game, 0, parseCards('2C 3C'));
+  discard(game, 1, parseCards('2S 3S'));
+  const played = parseCards(stack);
+  Object.assign(game, {
+    hands: [parseCards(mine), parseCards(theirs)],
+    kept: [parseCards(mine), parseCards(theirs)],
+    stack: played,
+    pile: played.map(card => ({ card, player: 1 })),
+    count: played.reduce((sum, c) => sum + Math.min((c % 13) + 1, 10), 0),
+    turn: 0,
+  });
+  return game;
+}
+
+test('ai: takes the fifteen', () => {
+  const game = pegPosition('5H 9C', 'AC 6C', 'KD');
+  equal(cardName(ratePlays(game, 0)[0].card), '5♥');
+  const tip = hint(game, 0);
+  equal([tip.cards.map(cardName), /fifteen/.test(tip.text)], [['5♥'], true], 'hint');
+});
+
+test('ai: leads the four rather than a five or a ten', () => {
+  const game = pegPosition('5H KD 4S 9C', 'AC 6C 7C 7D', '');
+  equal(cardName(ratePlays(game, 0)[0].card), '4♠');
+});
+
+test('ai: orders its last cards for the fifteen once the opponent is out', () => {
+  const game = pegPosition('5H JC', '', '10D');
+  equal(cardName(ratePlays(game, 0)[0].card), '5♥');
+});
+
+test('ai: discard hint names two cards from the hand', () => {
+  const game = stackedGame('5H 5D 10S JC 2C 8D', 'QD QC 8H 8C 2S 3S', '4C');
+  const tip = hint(game, 0);
+  equal(tip.cards.map(cardName).sort(), ['2♣', '8♦']);
+});
+
+// ---- Statistics ---------------------------------------------------------
+
+test('stats: records a finished game against the computer', () => {
+  const stats = emptyStats();
+  const game = newGame({ mode: 'ai', difficulty: 'hard' });
+  Object.assign(game, { phase: 'over', winner: 0, scores: [121, 80], deals: 9 });
+  game.tally[0] = { pegging: 30, hand: { count: 9, points: 70, best: 16 }, crib: { count: 4, points: 21, best: 8 } };
+  recordGame(stats, game);
+  recordGame(stats, game);
+  equal(stats.ai.hard, { games: 2, wins: 2, streak: 2, bestStreak: 2, skunks: 2, skunked: 0 }, 'row');
+  equal(stats.records, { hand: 16, crib: 8, margin: 41 }, 'records');
+  equal(stats.totals, { deals: 18, pegging: 60, hand: { count: 18, points: 140 }, crib: { count: 8, points: 42 } }, 'totals');
+
+  Object.assign(game, { winner: 1, scores: [100, 121] });
+  recordGame(stats, game);
+  equal(stats.ai.hard, { games: 3, wins: 2, streak: 0, bestStreak: 2, skunks: 2, skunked: 0 }, 'row after a loss');
+  equal(stats.records.margin, 41, 'margin unchanged by a loss');
+});
+
+test('stats: two-player games only count wins per seat', () => {
+  const stats = emptyStats();
+  const game = newGame({ mode: '2p' });
+  Object.assign(game, { phase: 'over', winner: 1, scores: [90, 121] });
+  recordGame(stats, game);
+  equal(stats.twoPlayer, { games: 1, wins: [0, 1] });
+  equal(stats.totals.deals, 0, 'no per-hand figures');
+});
+
+test('stats: damaged saved data falls back to zeros', () => {
+  equal(loadStats(null), emptyStats(), 'nothing saved');
+  equal(loadStats('<b>nope</b>'), emptyStats(), 'a string');
+  const saved = emptyStats();
+  saved.ai.easy.wins = 3;
+  saved.records.hand = 'twenty';
+  delete saved.twoPlayer;
+  const loaded = loadStats(JSON.parse(JSON.stringify(saved)));
+  equal([loaded.ai.easy.wins, loaded.records.hand, loaded.twoPlayer], [3, 0, { games: 0, wins: [0, 0] }]);
+});
+
+// ---- Self-play ----------------------------------------------------------
+
+function playOut(levels) {
+  const game = newGame({ mode: '2p' });
+  for (let steps = 0; game.phase !== 'over'; steps++) {
+    if (steps > 5000) throw new Error('game did not finish');
+    if (game.phase === 'discard') {
+      discard(game, 0, pickDiscard(game, 0, levels[0]));
+      discard(game, 1, pickDiscard(game, 1, levels[1]));
+    } else if (game.phase === 'play') {
+      playCard(game, game.turn, pickPlay(game, game.turn, levels[game.turn]));
+    } else {
+      advanceShow(game);
+    }
+  }
+  const [winner, loser] = [game.scores[game.winner], game.scores[1 - game.winner]];
+  if (winner !== 121 || !(loser >= 0 && loser < 121)) throw new Error(`bad final score ${game.scores}`);
+  return game;
+}
+
+function winRate(a, b, games) {
+  let wins = 0;
+  for (let i = 0; i < games; i++) {
+    // Alternate seats so neither level benefits from sitting first.
+    const seat = i % 2;
+    const game = playOut(seat ? [b, a] : [a, b]);
+    if (game.winner === seat) wins++;
+  }
+  return wins / games;
+}
+
+const realRandom = Math.random;
+Math.random = seeded(2026);
+const started = performance.now();
+for (const [a, b, games, atLeast] of [['hard', 'easy', 200, 0.65], ['medium', 'easy', 200, 0.55], ['hard', 'medium', 200, 0.5]]) {
+  test(`self-play: ${a} beats ${b} over ${games} games`, () => {
+    const rate = winRate(a, b, games);
+    notes.push(`${a} vs ${b}: ${(rate * 100).toFixed(1)}% wins for ${a}`);
+    if (rate < atLeast) throw new Error(`${a} won only ${(rate * 100).toFixed(1)}%`);
+  });
+}
+notes.push(`self-play took ${Math.round(performance.now() - started)} ms`);
+Math.random = realRandom;
+
+// ---- Report -------------------------------------------------------------
+
+const failed = results.filter(r => !r.ok);
+const summary = `${failed.length ? 'FAILED' : 'PASSED'} ${results.length - failed.length}/${results.length}`;
+document.title = summary;
+const heading = document.getElementById('summary');
+heading.textContent = summary;
+heading.className = failed.length ? 'fail' : 'pass';
+document.getElementById('out').textContent = [
+  ...results.map(r => (r.ok ? `ok    ${r.name}` : `FAIL  ${r.name}\n      ${r.error}`)),
+  '',
+  ...notes,
+].join('\n');
+</script>
+<script>
+  // A module that fails to load never reaches the report above.
+  addEventListener('error', event => {
+    document.getElementById('summary').textContent = `FAILED to run: ${event.message}`;
+  });
+</script>
+</body>
+</html>
