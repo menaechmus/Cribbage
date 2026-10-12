@@ -6,9 +6,13 @@ import { summarize } from './scoring.js';
 import { newGame, discard, playCard, advanceShow, legalCards, skunk } from './game.js';
 import { pickDiscard, pickPlay, hint } from './ai.js';
 import { emptyStats, loadStats, recordGame } from './stats.js';
+import { playSound, setMuted, unlockSound } from './sound.js';
 
 const AI = 1; // the computer always sits in seat 1
 const AI_DELAY = 900;
+const SHUFFLE_MS = 560; // two riffles of the deck, as timed in the stylesheet
+const DEAL_GAP_MS = 60; // between one card leaving the deck and the next
+const FLIGHT_MS = 240; // a card's trip from the deck to a hand
 const SETTINGS_KEY = 'cribbage.settings';
 const GAME_KEY = 'cribbage.game';
 const STATS_KEY = 'cribbage.stats';
@@ -40,7 +44,7 @@ function parseValue(text) {
 
 // Saved settings are only accepted if the menu offers that value.
 function loadSettings() {
-  const settings = { mode: 'ai', difficulty: 'medium', target: 121, hints: true };
+  const settings = { mode: 'ai', difficulty: 'medium', target: 121, hints: true, sound: true };
   const saved = load(SETTINGS_KEY);
   for (const group of document.querySelectorAll('.choice')) {
     const key = group.dataset.setting;
@@ -58,8 +62,14 @@ let tip = null; // { cards, text } from the last hint
 let messages = []; // what the last action did, in words
 let revealedTo = null; // two-player mode: the seat whose hand is face-up
 let pileShown = 0; // pile cards already drawn, so only new ones animate
+let starterShown = false; // likewise for the starter, which turns over once
+let dealing = false; // the shuffle-and-deal animation is running
+let turnUp = false; // the next redraw turns the bottom hand face-up
 let resetArmed = false;
 let aiTimer = 0;
+let dealTimer = 0;
+
+setMuted(!settings.sound);
 
 // ---- Who is who ---------------------------------------------------------
 
@@ -81,14 +91,16 @@ const viewer = () => (game.mode === 'ai' ? 0 : actor() ?? revealedTo ?? 0);
 
 // Two players share one screen, so a hand stays hidden until its owner asks.
 const covered = () => game.mode === '2p' && actor() !== null && actor() !== revealedTo;
-const canAct = () => actor() !== null && !isAi(actor()) && !covered();
+const canAct = () => actor() !== null && !isAi(actor()) && !covered() && !dealing;
 
 // ---- Drawing ------------------------------------------------------------
 
 const BACK = '<span class="card back"></span>';
 
-// U+FE0E asks for the plain glyph, so phones do not swap in a colour emoji.
-const suitGlyph = card => `${SUITS[suit(card)]}︎`;
+// The text variation selector (U+FE0E) asks for the plain glyph, so phones do
+// not swap in a colour emoji.
+const TEXT_STYLE = String.fromCharCode(0xfe0e);
+const suitGlyph = card => SUITS[suit(card)] + TEXT_STYLE;
 
 function cardHtml(card, classes = '', asButton = false) {
   const tag = asButton ? 'button' : 'span';
@@ -133,7 +145,7 @@ function drawBoard() {
       holes += `<circle cx="${x.toFixed(2)}" cy="${y}" r="2"/>`;
     }
     for (const [which, hole] of pegHoles(seat)) {
-      pegs +=`<circle class="peg seat${seat} ${which}" r="3.3" style="transform: ${pegTransform(seat, hole)}"/>`;
+      pegs += `<circle class="peg seat${seat} ${which}" r="3.3" style="transform: ${pegTransform(seat, hole)}"/>`;
     }
   }
   const [finishX, finishY] = holeXY(0, game.target);
@@ -155,9 +167,10 @@ function playHtml(me) {
     })
     .join('');
   const cut = game.starter !== null;
+  const deck = `<span class="card back deck${dealing ? ' shuffling' : ''}"></span>`;
   return `
     <div class="side">
-      <figure>${cut ? cardHtml(game.starter) : BACK}<figcaption>${cut ? 'Starter' : 'Deck'}</figcaption></figure>
+      <figure>${cut ? cardHtml(game.starter, starterShown ? '' : 'turn') : deck}<figcaption>${cut ? 'Starter' : 'Deck'}</figcaption></figure>
       <figure>${game.crib.length ? BACK : '<span class="card empty"></span>'}<figcaption>${owner(game.dealer)} crib</figcaption></figure>
     </div>
     <div class="pile">${pile}</div>
@@ -178,6 +191,7 @@ function tallyHtml() {
 }
 
 function promptText(me, acting) {
+  if (dealing) return 'Shuffling and dealing…';
   if (game.phase === 'discard' && acting) {
     return `Choose two cards for ${game.dealer === me ? 'your own' : `${name(game.dealer)}'s`} crib.`;
   }
@@ -190,7 +204,7 @@ function promptText(me, acting) {
 }
 
 function mainButton(acting) {
-  if (game.phase === 'show') return [['Count the hands', 'Next hand', 'Count the crib', 'Next deal'][game.showStep + 1], true];
+  if (game.phase === 'show') return [['Count hands', 'Next hand', 'Count crib', 'Next deal'][game.showStep + 1], true];
   if (game.phase === 'discard') return ['Send to crib', acting && selected.length === 2];
   if (game.phase === 'play') return [selected.length ? `Play ${cardName(selected[0])}` : 'Play', acting && selected.length === 1];
   return ['Game over', false];
@@ -274,16 +288,20 @@ function render() {
   $('top-hand').innerHTML = BACK.repeat(game.hands[them].length);
 
   const legal = game.phase === 'play' && acting ? legalCards(game, me) : null;
+  const turning = turnUp && !hidden && !dealing;
+  turnUp = false;
   $('bottom-hand').innerHTML = game.hands[me]
     .map(card => {
-      if (hidden) return BACK;
-      const classes = [selected.includes(card) && 'selected', tip?.cards.includes(card) && 'tip', legal && !legal.includes(card) && 'dim'];
+      if (hidden || dealing) return BACK;
+      const classes = [selected.includes(card) && 'selected', tip?.cards.includes(card) && 'tip', legal && !legal.includes(card) && 'dim', turning && 'turn'];
       return cardHtml(card, classes.filter(Boolean).join(' '), true);
     })
     .join('');
+  if (turning) [...$('bottom-hand').children].forEach((card, i) => card.style.setProperty('--i', i));
 
   $('center').innerHTML = game.show ? tallyHtml() : playHtml(me);
   pileShown = game.pile.length;
+  starterShown = game.starter !== null;
 
   $('events').textContent = messages.join(' ');
   $('prompt').textContent = tip ? tip.text : promptText(me, acting);
@@ -294,8 +312,10 @@ function render() {
   $('btn-main').disabled = !enabled;
   $('btn-hint').hidden = !settings.hints;
   $('btn-hint').disabled = !acting;
+  $('btn-sound').setAttribute('aria-pressed', settings.sound);
 
-  $('cover').hidden = !hidden;
+  // The cover waits for the deal to finish: the cards arrive face-down anyway.
+  $('cover').hidden = !hidden || dealing;
   if (hidden) {
     $('cover-title').textContent = `Pass the device to ${name(actor())}`;
     $('cover-text').textContent = messages.join(' ');
@@ -321,13 +341,69 @@ function describe(events) {
     .filter(Boolean);
 }
 
+// One sound for each thing that just happened, spaced so they do not pile up.
+function soundEvents(events) {
+  let delay = 0;
+  for (const event of events) {
+    if (event.type === 'play') playSound('place');
+    else if (event.type === 'cut') playSound('flip', (delay += 0.15));
+    else if (event.type === 'score') playSound('peg', (delay += 0.18));
+  }
+  if (game.phase === 'over') playSound(isAi(game.winner) ? 'lose' : 'win', delay + 0.35);
+}
+
+// Shows a fresh deal: the deck riffles, then twelve cards fly to the two hands
+// in dealing order. The cards are already in their final places in the page;
+// each is only drawn as if it started at the deck.
+function dealCards() {
+  playSound('shuffle');
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    render();
+    return;
+  }
+
+  dealing = true;
+  render();
+  const deck = $('center').querySelector('.deck').getBoundingClientRect();
+  const hands = [$('bottom-hand'), $('top-hand')];
+  const first = viewer() === game.dealer ? 1 : 0; // the non-dealer is dealt to first
+  for (let i = 0; i < 12; i++) {
+    const card = hands[(first + i) % 2].children[Math.floor(i / 2)];
+    const box = card.getBoundingClientRect();
+    const dx = deck.left + deck.width / 2 - box.left - box.width / 2;
+    const dy = deck.top + deck.height / 2 - box.top - box.height / 2;
+    const delay = SHUFFLE_MS + i * DEAL_GAP_MS;
+    // Invisible while it waits its turn, then out from the deck to its place.
+    card.animate(
+      [
+        { transform: `translate(${dx}px, ${dy}px) scale(${deck.width / box.width})`, opacity: 0 },
+        { opacity: 1, offset: 0.1 },
+        { transform: 'none', opacity: 1 },
+      ],
+      { duration: FLIGHT_MS, delay, easing: 'ease-out', fill: 'backwards' },
+    );
+    playSound('deal', delay / 1000);
+  }
+  dealTimer = setTimeout(endDeal, SHUFFLE_MS + 11 * DEAL_GAP_MS + FLIGHT_MS);
+}
+
+// Also called early, when a tap or key skips the animation.
+function endDeal() {
+  if (!dealing) return;
+  clearTimeout(dealTimer);
+  dealing = false;
+  turnUp = true;
+  render();
+}
+
 // Runs one game action, then saves and redraws.
 function commit(action) {
   action();
   selected = [];
   tip = null;
   messages = describe(game.events);
-  if (game.phase === 'discard' && !game.crib.length) revealedTo = null; // new deal: hide both hands again
+  const dealt = game.phase === 'discard' && !game.crib.length;
+  if (dealt) revealedTo = null; // new deal: hide both hands again
   if (game.phase === 'over') {
     recordGame(stats, game);
     store(STATS_KEY, stats);
@@ -335,7 +411,9 @@ function commit(action) {
   } else {
     store(GAME_KEY, game);
   }
-  render();
+  soundEvents(game.events);
+  if (dealt) dealCards();
+  else render();
   scheduleAi();
 }
 
@@ -368,6 +446,8 @@ function onMain() {
   if (!canAct()) return;
   const seat = actor();
   if (game.phase === 'discard' && selected.length === 2) {
+    playSound('slide');
+    playSound('slide', 0.09);
     commit(() => {
       discard(game, seat, selected);
       if (isAi(1 - seat)) discard(game, AI, pickDiscard(game, AI));
@@ -385,13 +465,25 @@ function onHint() {
 
 function reveal() {
   revealedTo = actor();
+  turnUp = true;
   render();
+}
+
+function toggleSound() {
+  settings.sound = !settings.sound;
+  store(SETTINGS_KEY, settings);
+  setMuted(!settings.sound);
+  unlockSound();
+  playSound('peg'); // heard only when sound has just come back on
+  $('btn-sound').setAttribute('aria-pressed', settings.sound);
 }
 
 // ---- Screens ------------------------------------------------------------
 
 function showMenu() {
   clearTimeout(aiTimer);
+  clearTimeout(dealTimer);
+  dealing = false;
   for (const group of document.querySelectorAll('.choice')) {
     for (const button of group.children) {
       button.setAttribute('aria-pressed', parseValue(button.dataset.value) === settings[group.dataset.setting]);
@@ -416,11 +508,13 @@ function start(saved = null) {
   messages = [];
   revealedTo = null;
   pileShown = game.pile.length;
+  starterShown = game.starter !== null;
   drawBoard();
   $('menu').hidden = true;
   $('table').hidden = false;
   store(GAME_KEY, game);
-  render();
+  if (saved) render();
+  else dealCards();
   scheduleAi();
 }
 
@@ -438,6 +532,7 @@ $('menu').addEventListener('click', event => {
   if (!button) return;
   settings[button.parentElement.dataset.setting] = parseValue(button.dataset.value);
   store(SETTINGS_KEY, settings);
+  setMuted(!settings.sound);
   showMenu();
 });
 
@@ -450,6 +545,7 @@ $('btn-rules').addEventListener('click', () => {
 $('btn-menu').addEventListener('click', showMenu);
 $('btn-main').addEventListener('click', onMain);
 $('btn-hint').addEventListener('click', onHint);
+$('btn-sound').addEventListener('click', toggleSound);
 $('btn-reveal').addEventListener('click', reveal);
 
 $('bottom-hand').addEventListener('click', event => {
@@ -482,6 +578,21 @@ for (const button of document.querySelectorAll('[data-close]')) {
   });
 }
 
+// Browsers only allow sound once the page has been tapped or typed at, so every
+// tap and key wakes the audio. Either one also skips a deal in progress.
+for (const type of ['pointerdown', 'keydown']) {
+  document.addEventListener(
+    type,
+    event => {
+      unlockSound();
+      if (!dealing) return;
+      endDeal();
+      if (type === 'keydown') event.stopPropagation(); // it skipped the deal; it should not also pick a card
+    },
+    true,
+  );
+}
+
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape') {
     $('rules').hidden = true;
@@ -497,6 +608,8 @@ document.addEventListener('keydown', event => {
     else onMain();
   } else if (event.key.toLowerCase() === 'h') {
     onHint();
+  } else if (event.key.toLowerCase() === 'm') {
+    toggleSound();
   } else if (/^[1-6]$/.test(event.key) && !covered()) {
     const card = game.hands[viewer()][event.key - 1];
     if (card !== undefined) onCard(card);

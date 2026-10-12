@@ -8,13 +8,16 @@
   --tip: #9fe8ff;
   --seat0: #62b5ff;
   --seat1: #ff7f61;
-  /* One card width drives the whole table, limited by both screen dimensions. */
-  --size: clamp(38px, min(13.2vw, 9.2vh), 84px);
+  /* One card width drives the whole table. It is the largest that lets six
+     overlapped cards fit across and the whole table fit down the screen: the
+     height left after the fixed parts (bars, board, buttons), shared between
+     the rows of cards. */
+  --size: clamp(40px, min(16.5vw, (100vh - 24.4vw - 248px) / 4.3), 100px);
   --cw: var(--size);
 }
 
 @supports (height: 1dvh) {
-  :root { --size: clamp(38px, min(13.2vw, 9.2dvh), 84px); }
+  :root { --size: clamp(40px, min(16.5vw, (100dvh - 24.4vw - 248px) / 4.3), 100px); }
 }
 
 * { box-sizing: border-box; }
@@ -124,8 +127,8 @@ button {
   position: absolute;
   top: 5%;
   left: 7%;
-  font-size: calc(var(--cw) * 0.3);
-  line-height: 0.95;
+  font-size: calc(var(--cw) * 0.34);
+  line-height: 0.92;
   text-align: center;
 }
 
@@ -334,13 +337,17 @@ button {
   min-height: calc(var(--cw) * 1.4);
 }
 
-.hand-small { --cw: calc(var(--size) * 0.45); }
+.hand-small { --cw: calc(var(--size) * 0.42); }
 
 /* Room above the hand for a selected card to rise into. */
 .seat.bottom .hand {
+  gap: 0;
   min-height: calc(var(--size) * 1.6);
   padding-top: calc(var(--size) * 0.2);
 }
+
+/* Held like a fan: each card tucks under the next, leaving its corner clear. */
+.seat.bottom .hand .card + .card { margin-left: calc(var(--cw) * -0.14); }
 
 /* Once the cards are all played, the space goes to the counting panel. */
 .table[data-phase='show'] .seat .hand,
@@ -349,20 +356,23 @@ button {
   padding-top: 0;
 }
 
+/* Starter and crib down the left; the running count sits over the pile. */
 .center {
   display: grid;
   flex: 1;
-  grid-template-columns: auto 1fr auto;
+  grid-template: 'side count' auto 'side pile' auto / auto 1fr;
+  align-content: center;
   align-items: center;
-  gap: 10px;
-  min-height: calc(var(--size) * 2.6);
+  gap: 4px 10px;
+  min-height: calc(var(--size) * 2.1 + 36px);
 }
 
 .side {
   display: flex;
   flex-direction: column;
+  grid-area: side;
   gap: 6px;
-  --cw: calc(var(--size) * 0.68);
+  --cw: calc(var(--size) * 0.75);
 }
 
 .side figure {
@@ -379,11 +389,12 @@ button {
 
 .pile {
   display: flex;
+  grid-area: pile;
   align-items: center;
   justify-content: center;
   min-width: 0;
   padding: calc(var(--cw) * 0.28) 0;
-  --cw: calc(var(--size) * 0.9);
+  --cw: calc(var(--size) * 0.95);
 }
 
 .pile .card + .card { margin-left: calc(var(--cw) * -0.55); }
@@ -396,12 +407,45 @@ button {
   from { opacity: 0; transform: scale(1.25); }
 }
 
+/* A new deal: the deck splits into two halves that riffle together, twice.
+   ui.js then flies the cards out to the hands. */
+.deck.shuffling::before,
+.deck.shuffling::after {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: inherit;
+  box-shadow: inherit;
+  content: '';
+  animation: riffle 0.28s ease-in-out 2;
+}
+
+/* The deck sits at the screen edge, so the split leans right to stay in view. */
+.deck.shuffling::before { --shift: -6%; --tilt: -7deg; }
+.deck.shuffling::after { --shift: 64%; --tilt: 8deg; }
+
+@keyframes riffle {
+  40%, 60% { transform: translateX(var(--shift)) rotate(var(--tilt)); }
+}
+
+/* Cards turning face-up, one after another along a hand. */
+.card.turn {
+  animation: turn 0.22s ease-out backwards;
+  animation-delay: calc(var(--i, 0) * 40ms);
+}
+
+@keyframes turn {
+  from { transform: scaleX(0.05); filter: brightness(0.6); }
+}
+
 .count {
-  display: grid;
-  justify-items: center;
-  min-width: 3.4em;
-  padding: 6px 10px;
-  border-radius: 12px;
+  display: flex;
+  grid-area: count;
+  align-items: baseline;
+  justify-self: center;
+  gap: 8px;
+  padding: 2px 14px;
+  border-radius: 999px;
   background: rgba(0, 0, 0, 0.28);
 }
 
@@ -413,19 +457,21 @@ button {
 }
 
 .count b {
-  font-size: 1.6rem;
-  line-height: 1.1;
+  min-width: 1.2em;
+  font-size: 1.4rem;
+  line-height: 1.3;
   font-variant-numeric: tabular-nums;
+  text-align: center;
 }
 
 .count.idle { opacity: 0.4; }
 
 .tally {
   display: grid;
-  grid-column: 1 / -1;
+  grid-area: 1 / 1 / -1 / -1;
   justify-items: center;
   gap: 8px;
-  --cw: calc(var(--size) * 0.9);
+  --cw: calc(var(--size) * 0.95);
 }
 
 .tally h2 { font-size: 1.05rem; }
@@ -481,10 +527,46 @@ button {
 
 .actions .primary { flex: 1; }
 
-/* Wide or short screens: lay the starter and crib side by side to save height. */
+.actions .icon-btn {
+  width: 48px;
+  height: auto;
+}
+
+.icon-btn svg {
+  display: block;
+  width: 24px;
+  height: 24px;
+  margin: auto;
+  fill: currentColor;
+}
+
+.icon-btn svg .line {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 2;
+}
+
+/* The speaker shows sound waves when on and a cross when muted. */
+#btn-sound[aria-pressed='true'] .off,
+#btn-sound[aria-pressed='false'] .on { display: none; }
+#btn-sound[aria-pressed='false'] { color: var(--muted); }
+
+/* Wide screens: starter and crib side by side, and the count beside the pile.
+   The board is narrower here, so the height sum behind --size differs. */
 @media (min-aspect-ratio: 1/1) {
+  :root { --size: clamp(40px, min(16.5vw, (84vh - 225px) / 4.7), 100px); }
+
+  @supports (height: 1dvh) {
+    :root { --size: clamp(40px, min(16.5vw, (84dvh - 225px) / 4.7), 100px); }
+  }
+
   .side { flex-direction: row; }
-  .center { min-height: calc(var(--size) * 2.5); }
+
+  .center {
+    grid-template: 'side pile count' auto / auto 1fr auto;
+    min-height: calc(var(--size) * 2.5);
+  }
 
   .tally {
     grid-template-columns: auto minmax(180px, 280px);
@@ -497,10 +579,11 @@ button {
 
 /* A phone on its side: scores, board and buttons on the left, cards on the right. */
 @media (orientation: landscape) and (max-height: 520px) {
-  :root { --size: clamp(38px, min(8vw, 17vh), 84px); }
+  /* Here the cards share the height with only the score rows above them. */
+  :root { --size: clamp(38px, min(8vw, (100vh - 164px) / 3.46), 84px); }
 
   @supports (height: 1dvh) {
-    :root { --size: clamp(38px, min(8vw, 17dvh), 84px); }
+    :root { --size: clamp(38px, min(8vw, (100dvh - 164px) / 3.46), 84px); }
   }
 
   .table {
@@ -518,12 +601,28 @@ button {
     gap: 4px 8px;
   }
 
-  .icon-btn { grid-row: span 2; }
-  .score { min-height: 34px; }
+  .topbar .icon-btn { grid-row: span 2; }
+
+  .score {
+    min-height: 34px;
+    padding-block: 1px;
+  }
+
+  .score .points { font-size: 1.1rem; }
+
+  /* The button row is narrow here; tighter padding keeps labels on one line. */
+  .actions .btn { padding-inline: 12px; }
 
   .board { grid-area: board; width: 100%; }
   .seat.top { grid-area: top; }
-  .center { grid-area: center; min-height: 0; }
+
+  /* Back to the count over the pile: this column is short of width, not height. */
+  .center {
+    grid-area: center;
+    grid-template: 'side count' auto 'side pile' auto / auto 1fr;
+    min-height: 0;
+  }
+
   .status { grid-area: status; }
   .seat.bottom { grid-area: bottom; }
   .actions { grid-area: actions; align-self: end; }

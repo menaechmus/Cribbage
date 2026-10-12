@@ -8,7 +8,9 @@ It is a static page: plain HTML, CSS and JavaScript modules, with no build step 
 
 - Tap a card to choose it. When discarding, choose two and press **Send to crib**. During the play, tap the chosen card again or press **Play**.
 - **Hint** highlights the strongest move and says why. It can be switched off on the menu.
-- Keyboard: `1`–`6` choose a card, `Enter` confirms, `H` asks for a hint.
+- Each new hand is shuffled and dealt with a short animation; tap anywhere to skip it.
+- Sound effects can be muted with the speaker button, the Sound setting on the menu, or `M`.
+- Keyboard: `1`–`6` choose a card, `Enter` confirms, `H` asks for a hint, `M` mutes.
 - Scores are counted for you, with a line-by-line breakdown of every hand and crib.
 
 Settings, the game in progress and your statistics are kept in the browser's `localStorage`, so they stay on that device and browser and disappear if its site data is cleared.
@@ -37,5 +39,6 @@ Push to GitHub, then in the repository go to **Settings → Pages**, choose **De
 | `js/game.js` | The rules, as a plain game object and the actions that change it |
 | `js/ai.js` | The computer opponent and hints |
 | `js/stats.js` | Lifetime statistics |
-| `js/ui.js` | Drawing, input and storage |
-| `tests.html` | Tests for scoring, rules, the opponent and statistics |
+| `js/sound.js` | Sound effects, generated with the Web Audio API (no audio files) |
+| `js/ui.js` | Drawing, input, animation and storage |
+| `tests.html` | Tests for scoring, rules, the opponent, statistics and sound |

@@ -81,28 +81,30 @@ export function rateDiscards(hand, isDealer) {
     .sort((a, b) => b.value - a.value);
 }
 
-// Rough worth of two cards in a crib, for the medium opponent.
-function tossWorth([a, b]) {
-  let worth = 0;
-  if (rank(a) === rank(b)) worth += 2;
-  if (value(a) + value(b) === 15) worth += 2;
-  if (Math.abs(rank(a) - rank(b)) === 1) worth += 1;
-  if (value(a) === 5) worth += 1;
-  if (value(b) === 5) worth += 1;
-  return worth;
-}
+// How the weaker levels fall short. `randomToss` is the chance of throwing two
+// cards without looking; otherwise they keep the four that seem to score most,
+// misjudging each option by up to `tossNoise` points. `takePoints` is the
+// chance of noticing points on offer in the play. Neither level thinks about
+// the starter, the crib or what a card gives away.
+const LEVELS = {
+  easy: { randomToss: 0.4, tossNoise: 5, takePoints: 0.2 },
+  medium: { randomToss: 0.05, tossNoise: 3, takePoints: 0.75 },
+};
+
+const pickAny = list => list[Math.floor(Math.random() * list.length)];
 
 export function pickDiscard(game, player, level = game.difficulty) {
   const hand = game.hands[player];
-  const isDealer = game.dealer === player;
-  if (level === 'hard') return rateDiscards(hand, isDealer)[0].toss;
+  if (level === 'hard') return rateDiscards(hand, game.dealer === player)[0].toss;
+
+  const { randomToss, tossNoise } = LEVELS[level] ?? LEVELS.medium;
+  const options = splits(hand);
+  if (Math.random() < randomToss) return pickAny(options).toss;
 
   let best = null;
   let bestScore = -Infinity;
-  for (const { keep, toss } of splits(hand)) {
-    let score = handPoints(keep, null);
-    if (level === 'medium') score += (isDealer ? 1 : -1) * tossWorth(toss);
-    else score += Math.random() * 4; // easy: often misses the best keep
+  for (const { keep, toss } of options) {
+    const score = handPoints(keep, null) + Math.random() * tossNoise;
     if (score > bestScore) {
       bestScore = score;
       best = toss;
@@ -189,17 +191,15 @@ export function pickPlay(game, player, level = game.difficulty) {
   if (level === 'hard') return ratePlays(game, player)[0].card;
 
   const legal = game.hands[player].filter(c => game.count + value(c) <= 31);
-  if (level === 'easy') return legal[Math.floor(Math.random() * legal.length)];
+  let best = pickAny(legal);
+  if (Math.random() >= (LEVELS[level] ?? LEVELS.medium).takePoints) return best;
 
-  // Medium: take the points on offer, otherwise avoid leaving an easy 15 or 31.
-  let best = null;
-  let bestScore = -Infinity;
+  // Having noticed, play whichever card scores most right now.
+  let bestPoints = 0;
   for (const card of legal) {
-    const count = game.count + value(card);
-    let score = pegScore([...game.stack, card]).points * 10 + value(card) * 0.01;
-    if (count === 5 || count === 21) score -= 1;
-    if (score > bestScore) {
-      bestScore = score;
+    const points = pegScore([...game.stack, card]).points;
+    if (points > bestPoints) {
+      bestPoints = points;
       best = card;
     }
   }
