@@ -232,6 +232,23 @@ button {
   gap: 10px;
 }
 
+/* Short screens: tighten the menu so its last row of buttons stays in view. */
+@media (max-height: 640px) {
+  .menu { gap: 12px; }
+  .title h1 { font-size: 2rem; }
+  .options { gap: 6px; }
+
+  .fan {
+    margin-bottom: 8px;
+    --cw: 40px;
+  }
+
+  .choice button {
+    min-height: 36px;
+    padding-block: 6px;
+  }
+}
+
 /* Table */
 
 .topbar {
@@ -527,7 +544,9 @@ button {
 
 .actions .primary { flex: 1; }
 
-.actions .icon-btn {
+/* Beside full-size buttons an icon button matches their height. */
+.actions .icon-btn,
+.row .icon-btn {
   width: 48px;
   height: auto;
 }
@@ -665,6 +684,7 @@ button {
 }
 
 .dialog h2 { font-size: 1.4rem; }
+.dialog a { color: var(--tip); }
 
 .dialog h3 {
   color: var(--muted);

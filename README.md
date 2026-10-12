@@ -12,6 +12,7 @@ It is a static page: plain HTML, CSS and JavaScript modules, with no build step 
 - Sound effects can be muted with the speaker button, the Sound setting on the menu, or `M`.
 - Keyboard: `1`–`6` choose a card, `Enter` confirms, `H` asks for a hint, `M` mutes.
 - Scores are counted for you, with a line-by-line breakdown of every hand and crib.
+- The **i** button on the menu shows which version is running.
 
 Settings, the game in progress and your statistics are kept in the browser's `localStorage`, so they stay on that device and browser and disappear if its site data is cleared.
 
@@ -28,6 +29,10 @@ Then open <http://localhost:8000/>. The tests run in the browser at <http://loca
 ## Deploy to GitHub Pages
 
 Push to GitHub, then in the repository go to **Settings → Pages**, choose **Deploy from a branch**, and select `main` and `/ (root)`. The game is served at `https://<user>.github.io/<repository>/`.
+
+## Releasing
+
+Before pushing a change, raise `VERSION` and `RELEASED` at the top of `js/ui.js`. The About box shows them, which makes it easy to tell when a browser is still running a cached copy of an earlier release.
 
 ## Layout
 

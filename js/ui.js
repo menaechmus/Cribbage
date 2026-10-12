@@ -8,6 +8,11 @@ import { pickDiscard, pickPlay, hint } from './ai.js';
 import { emptyStats, loadStats, recordGame } from './stats.js';
 import { playSound, setMuted, unlockSound } from './sound.js';
 
+// Shown in the About box. Bump both with every release: a browser still
+// running a cached copy of this file then shows the old number.
+const VERSION = '1.2.0';
+const RELEASED = '11 October 2026';
+
 const AI = 1; // the computer always sits in seat 1
 const AI_DELAY = 900;
 const SHUFFLE_MS = 560; // two riffles of the deck, as timed in the stylesheet
@@ -542,6 +547,10 @@ $('btn-stats').addEventListener('click', showStats);
 $('btn-rules').addEventListener('click', () => {
   $('rules').hidden = false;
 });
+$('about-version').textContent = `Version ${VERSION} · ${RELEASED}`;
+$('btn-about').addEventListener('click', () => {
+  $('about').hidden = false;
+});
 $('btn-menu').addEventListener('click', showMenu);
 $('btn-main').addEventListener('click', onMain);
 $('btn-hint').addEventListener('click', onHint);
@@ -595,8 +604,7 @@ for (const type of ['pointerdown', 'keydown']) {
 
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape') {
-    $('rules').hidden = true;
-    $('stats').hidden = true;
+    for (const id of ['rules', 'stats', 'about']) $(id).hidden = true;
     return;
   }
   const busy = !game || $('table').hidden || !$('rules').hidden || !$('stats').hidden || game.phase === 'over';
