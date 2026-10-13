@@ -7,10 +7,11 @@ import { newGame, discard, playCard, go, advanceShow, legalCards, skunk } from '
 import { pickDiscard, pickPlay, hint } from './ai.js';
 import { emptyStats, loadStats, recordGame } from './stats.js';
 import { playSound, setMuted, unlockSound } from './sound.js';
+import { BOARD, holeXY, trackPath } from './board.js';
 
 // Shown in the About box. Bump both with every release: a browser still
 // running a cached copy of this file then shows the old number.
-const VERSION = '1.3.1';
+const VERSION = '1.4.0';
 const RELEASED = '13 October 2026';
 
 const AI = 1; // the computer always sits in seat 1
@@ -121,26 +122,9 @@ function cardHtml(card, classes = '', asButton = false) {
   );
 }
 
-// Pegboard geometry in SVG units: three streets of holes, walked left to
-// right, right to left, then left to right again to the finish.
-const BOARD = { width: 360, height: 88, left: 28, right: 336, top: 15, street: 26, lane: 8 };
-
-function holeXY(seat, hole) {
-  const perStreet = (game.target - 1) / 3;
-  const y = BOARD.top + seat * BOARD.lane;
-  if (hole < 1) return [16 + hole * 8, y]; // the two starting holes, -1 and 0
-  if (hole >= game.target) return [BOARD.width - 9, BOARD.top + 2 * BOARD.street + BOARD.lane / 2];
-  const street = Math.floor((hole - 1) / perStreet);
-  const step = (hole - 1) % perStreet;
-  const column = street % 2 ? perStreet - 1 - step : step;
-  // Holes sit in groups of five with half a step between groups.
-  const pitch = (BOARD.right - BOARD.left) / (perStreet - 1 + (perStreet / 5 - 1) / 2);
-  return [BOARD.left + (column + Math.floor(column / 5) / 2) * pitch, y + street * BOARD.street];
-}
-
 function pegTransform(seat, hole) {
-  const [x, y] = holeXY(seat, hole);
-  return `translate(${x.toFixed(2)}px, ${y}px)`;
+  const [x, y] = holeXY(game.target, seat, hole);
+  return `translate(${x.toFixed(2)}px, ${y.toFixed(2)}px)`;
 }
 
 // `from` is the game, or the scores and pegs held from before a count.
@@ -151,21 +135,18 @@ function drawBoard() {
   let pegs = '';
   for (const seat of [0, 1]) {
     for (let hole = -1; hole < game.target; hole++) {
-      const [x, y] = holeXY(seat, hole);
-      holes += `<circle cx="${x.toFixed(2)}" cy="${y}" r="2"/>`;
+      const [x, y] = holeXY(game.target, seat, hole);
+      holes += `<circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="2"/>`;
     }
     for (const [which, hole] of pegHoles(seat)) {
       pegs += `<circle class="peg seat${seat} ${which}" r="3.3" style="transform: ${pegTransform(seat, hole)}"/>`;
     }
   }
-  const [finishX, finishY] = holeXY(0, game.target);
-  const streets = [0, 1, 2]
-    .map(i => `<rect x="${BOARD.left - 7}" y="${BOARD.top + i * BOARD.street - 6}" width="${BOARD.right - BOARD.left + 14}" height="${BOARD.lane + 12}" rx="10"/>`)
-    .join('');
+  const [finishX, finishY] = holeXY(game.target, 0, game.target);
   $('board').innerHTML =
     `<svg viewBox="0 0 ${BOARD.width} ${BOARD.height}" role="img" aria-label="Cribbage board">` +
-    `<g class="streets">${streets}</g>` +
-    `<g class="holes">${holes}<circle cx="${finishX}" cy="${finishY}" r="2.8"/></g>${pegs}</svg>`;
+    `<path class="track" d="${trackPath(game.target)}" stroke-width="${BOARD.track}"/>` +
+    `<g class="holes">${holes}<circle cx="${finishX.toFixed(2)}" cy="${finishY}" r="2.8"/></g>${pegs}</svg>`;
 }
 
 function playHtml(me) {

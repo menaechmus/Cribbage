@@ -44,6 +44,7 @@ Before pushing a change, raise `VERSION` and `RELEASED` at the top of `js/ui.js`
 | `js/scoring.js` | Scoring for hands, cribs and the play |
 | `js/game.js` | The rules, as a plain game object and the actions that change it |
 | `js/ai.js` | The computer opponent and hints |
+| `js/board.js` | Pegboard geometry: where each hole sits along the S-shaped track |
 | `js/stats.js` | Lifetime statistics |
 | `js/sound.js` | Sound effects, generated with the Web Audio API (no audio files) |
 | `js/ui.js` | Drawing, input, animation and storage |

@@ -20,6 +20,7 @@ import { newGame, deal, discard, playCard, go, advanceShow, legalCards, skunk } 
 import { rateDiscards, ratePlays, pickDiscard, pickPlay, hint } from './js/ai.js';
 import { emptyStats, loadStats, recordGame } from './js/stats.js';
 import { SOUNDS, renderSound } from './js/sound.js';
+import { BOARD, holeXY, trackPath } from './js/board.js';
 
 const results = [];
 const notes = [];
@@ -371,6 +372,87 @@ test('stats: damaged saved data falls back to zeros', () => {
   const loaded = loadStats(JSON.parse(JSON.stringify(saved)));
   equal([loaded.ai.easy.wins, loaded.records.hand, loaded.twoPlayer], [3, 0, { games: 0, wins: [0, 0] }]);
 });
+
+// ---- Board --------------------------------------------------------------
+
+const distance = ([x1, y1], [x2, y2]) => Math.hypot(x2 - x1, y2 - y1);
+const near = (a, b) => Math.abs(a - b) < 1e-6;
+
+// The parts of the track, as [first hole, last hole] on each board.
+const boards = {
+  121: { top: [1, 35], bendOne: [36, 40], middle: [41, 80], bendTwo: [81, 85], bottom: [86, 120] },
+  61: { top: [1, 15], bendOne: [16, 20], middle: [21, 40], bendTwo: [41, 45], bottom: [46, 60] },
+};
+
+for (const [name, parts] of Object.entries(boards)) {
+  const target = Number(name);
+  // Each lane from its two starting holes (-1, 0) through to the finish hole.
+  const lanes = [0, 1].map(seat => Array.from({ length: target + 2 }, (_, i) => holeXY(target, seat, i - 1)));
+  const at = (seat, hole) => lanes[seat][hole + 1];
+  const pitch = distance(at(0, 1), at(0, 2));
+
+  test(`board ${target}: the track is one unbroken run of holes`, () => {
+    for (const seat of [0, 1]) {
+      for (let hole = -1; hole < target; hole++) {
+        const step = distance(at(seat, hole), at(seat, hole + 1));
+        if (step > 1.75 * pitch) throw new Error(`seat ${seat}: a jump of ${step.toFixed(1)} after hole ${hole}`);
+        if (step < 5.5) throw new Error(`seat ${seat}: holes ${hole} and ${hole + 1} are only ${step.toFixed(1)} apart`);
+      }
+    }
+  });
+
+  test(`board ${target}: straights and bends hold the holes they should`, () => {
+    for (const seat of [0, 1]) {
+      const row = hole => at(seat, hole)[1];
+      const x = hole => at(seat, hole)[0];
+      for (const [part, [first, last]] of Object.entries(parts)) {
+        const level = Array.from({ length: last - first }, (_, i) => near(row(first + i), row(first + i + 1)));
+        const straight = !part.startsWith('bend');
+        if (straight && !level.every(Boolean)) throw new Error(`seat ${seat}: ${part} is not level`);
+        if (!straight && level.some(Boolean)) throw new Error(`seat ${seat}: ${part} is not curved`);
+      }
+      // Left to right along the top, back along the middle, and right again.
+      equal([x(parts.top[0]) < x(parts.top[1]), x(parts.middle[0]) > x(parts.middle[1]), x(parts.bottom[0]) < x(parts.bottom[1])], [true, true, true], `seat ${seat} directions`);
+      // The bends stick out beyond both ends of the middle straight.
+      const bulge = ([first, last]) => [first, first + 1, first + 2, first + 3, last].map(x);
+      if (Math.min(...bulge(parts.bendOne)) <= x(parts.middle[0])) throw new Error('first bend does not curve out to the right');
+      if (Math.max(...bulge(parts.bendTwo)) >= x(parts.middle[1])) throw new Error('second bend does not curve out to the left');
+      equal([row(0), row(-1)].map(y => near(y, row(1))), [true, true], `seat ${seat} starting holes on the top straight`);
+    }
+    equal(at(0, target), at(1, target), 'one finish hole for both');
+  });
+
+  test(`board ${target}: the lanes run side by side and are the same length`, () => {
+    const gap = distance(at(0, 1), at(1, 1));
+    for (let hole = -1; hole < target; hole++) {
+      if (!near(distance(at(0, hole), at(1, hole)), gap)) throw new Error(`lanes drift apart at hole ${hole}`);
+    }
+    const length = seat => {
+      let total = 0;
+      for (let hole = 1; hole < target - 1; hole++) total += distance(at(seat, hole), at(seat, hole + 1));
+      return total;
+    };
+    if (!near(length(0), length(1))) throw new Error(`lane lengths differ: ${length(0)} and ${length(1)}`);
+    // Each lane is on the outside of one bend and the inside of the other.
+    const upper = hole => at(0, hole)[1] < at(1, hole)[1];
+    equal([upper(parts.top[0]), upper(parts.middle[0]), upper(parts.bottom[0])], [true, false, true], 'which lane is uppermost');
+  });
+
+  test(`board ${target}: no holes overlap and all are on the board`, () => {
+    const holes = [...lanes[0], ...lanes[1].slice(0, -1)]; // the finish hole is shared
+    for (const [x, y] of holes) {
+      if (x < 6 || x > BOARD.width - 6 || y < 6 || y > BOARD.height - 6) throw new Error(`hole at ${x.toFixed(1)}, ${y.toFixed(1)} is off the board`);
+    }
+    for (let i = 0; i < holes.length; i++) {
+      for (let j = i + 1; j < holes.length; j++) {
+        if (distance(holes[i], holes[j]) < 5.5) throw new Error(`holes at ${holes[i].map(n => n.toFixed(1))} and ${holes[j].map(n => n.toFixed(1))} overlap`);
+      }
+    }
+    equal((trackPath(target).match(/A/g) || []).length, 2, 'bends in the track outline');
+  });
+
+  notes.push(`board ${target}: holes ${pitch.toFixed(2)} apart on the straights, ${distance(at(1, parts.bendOne[0]), at(1, parts.bendOne[0] + 1)).toFixed(2)} on the inside of a bend, ${distance(at(0, parts.bendOne[0]), at(0, parts.bendOne[0] + 1)).toFixed(2)} on the outside`);
+}
 
 // ---- Sound --------------------------------------------------------------
 
