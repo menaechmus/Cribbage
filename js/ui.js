@@ -11,7 +11,7 @@ import { playSound, setMuted, unlockSound } from './sound.js';
 // Shown in the About box. Bump both with every release: a browser still
 // running a cached copy of this file then shows the old number.
 const VERSION = '1.2.0';
-const RELEASED = '11 October 2026';
+const RELEASED = '13 October 2026';
 
 const AI = 1; // the computer always sits in seat 1
 const AI_DELAY = 900;
