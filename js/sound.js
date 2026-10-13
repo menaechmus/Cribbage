@@ -87,6 +87,11 @@ const EFFECTS = {
     burst(context, at, { length: 0.015, pitch: 4200, gain: 0.5 });
   },
 
+  // One scoring combination called out while a hand is counted.
+  count(context, at) {
+    tone(context, at, { length: 0.09, pitch: 1320, gain: 0.2, wave: 'triangle' });
+  },
+
   win(context, at) {
     [523, 659, 784, 1047].forEach((pitch, i) => tone(context, at + i * 0.1, { length: 0.3, pitch, gain: 0.2, wave: 'triangle' }));
   },

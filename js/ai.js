@@ -222,7 +222,7 @@ export function hint(game, player) {
   }
 
   const plays = ratePlays(game, player);
-  if (!plays.length) return null;
+  if (!plays.length) return { cards: [], text: 'None of your cards fits under 31, so say go.' };
   const best = plays[0];
   const card = cardName(best.card);
   let text;

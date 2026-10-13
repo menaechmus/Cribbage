@@ -109,20 +109,29 @@ export function playCard(game, player, card) {
   if (game.phase !== 'over') passTurn(game, player);
 }
 
-// Decides who plays next after `last` laid a card, calling "go" and resetting
-// the count as needed.
+// A player holding cards, none of which fits under 31, has to say go. Their
+// opponent, who laid the last card, then plays on alone.
+export function go(game, player) {
+  check(game.phase === 'play' && game.turn === player, 'Not this player\'s turn');
+  check(game.hands[player].length > 0 && !legalCards(game, player).length, 'A card can still be played');
+  game.events = [];
+  game.goCalled = true;
+  game.events.push({ type: 'go', player });
+  passTurn(game, 1 - player);
+}
+
+// Decides who acts next after `last` laid a card, or after the other player
+// said go. The other player answers whenever they hold cards, if only to say
+// go. Once they have, `last` carries on alone until nothing fits, takes the
+// point for it, and a new count begins.
 function passTurn(game, last) {
   const other = 1 - last;
   const canPlay = player => game.hands[player].some(c => game.count + value(c) <= 31);
 
   if (game.count < 31) {
-    if (canPlay(other)) {
+    if (!game.goCalled && game.hands[other].length) {
       game.turn = other;
       return;
-    }
-    if (game.hands[other].length && !game.goCalled) {
-      game.goCalled = true;
-      game.events.push({ type: 'go', player: other });
     }
     if (canPlay(last)) {
       game.turn = last;

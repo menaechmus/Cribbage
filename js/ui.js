@@ -3,14 +3,14 @@
 
 import { RANKS, SUITS, rank, suit, isRed, cardName } from './cards.js';
 import { summarize } from './scoring.js';
-import { newGame, discard, playCard, advanceShow, legalCards, skunk } from './game.js';
+import { newGame, discard, playCard, go, advanceShow, legalCards, skunk } from './game.js';
 import { pickDiscard, pickPlay, hint } from './ai.js';
 import { emptyStats, loadStats, recordGame } from './stats.js';
 import { playSound, setMuted, unlockSound } from './sound.js';
 
 // Shown in the About box. Bump both with every release: a browser still
 // running a cached copy of this file then shows the old number.
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 const RELEASED = '13 October 2026';
 
 const AI = 1; // the computer always sits in seat 1
@@ -18,6 +18,8 @@ const AI_DELAY = 900;
 const SHUFFLE_MS = 560; // two riffles of the deck, as timed in the stylesheet
 const DEAL_GAP_MS = 60; // between one card leaving the deck and the next
 const FLIGHT_MS = 240; // a card's trip from the deck to a hand
+const COUNT_STEP_MS = 700; // each scoring combination stays up this long...
+const COUNT_MAX_MS = 4500; // ...unless a big hand would make the whole count drag
 const SETTINGS_KEY = 'cribbage.settings';
 const GAME_KEY = 'cribbage.game';
 const STATS_KEY = 'cribbage.stats';
@@ -69,6 +71,8 @@ let revealedTo = null; // two-player mode: the seat whose hand is face-up
 let pileShown = 0; // pile cards already drawn, so only new ones animate
 let starterShown = false; // likewise for the starter, which turns over once
 let dealing = false; // the shuffle-and-deal animation is running
+let counting = null; // while a hand is counted out: { done, pace, held, timer }
+let skipClick = false; // the tap that skipped an animation should do nothing else
 let turnUp = false; // the next redraw turns the bottom hand face-up
 let resetArmed = false;
 let aiTimer = 0;
@@ -139,7 +143,8 @@ function pegTransform(seat, hole) {
   return `translate(${x.toFixed(2)}px, ${y}px)`;
 }
 
-const pegHoles = seat => [['back', game.back[seat]], ['front', game.scores[seat]]];
+// `from` is the game, or the scores and pegs held from before a count.
+const pegHoles = (seat, from = game) => [['back', from.back[seat]], ['front', from.scores[seat]]];
 
 function drawBoard() {
   let holes = '';
@@ -182,26 +187,44 @@ function playHtml(me) {
     <div class="count${game.phase === 'play' ? '' : ' idle'}"><small>Count</small><b>${game.count}</b></div>`;
 }
 
+// The counting panel. While a hand is being counted out it shows only the
+// combinations reached so far, with the cards of the latest one lit. Every
+// line is in place from the start (the unreached ones hidden) so the panel
+// does not jump as it fills.
 function tallyHtml() {
-  const { player, kind, cards, items, total } = game.show;
+  const { player, kind, cards, items } = game.show;
+  const done = counting ? counting.done : items.length;
+  const latest = counting ? items[done - 1] : null;
+  // Nobs is the Jack matching the starter's suit, so light the starter with it.
+  const lit = latest && [...latest.cards, ...(latest.type === 'nobs' ? [game.starter] : [])];
+  const light = card => (lit ? (lit.includes(card) ? 'lit' : 'unlit') : '');
+
+  const reached = summarize(items.slice(0, done));
   const lines = summarize(items)
-    .map(line => `<li><span>${line.label}</span><b>${line.points}</b></li>`)
+    .map((line, i) => {
+      const { label, points } = reached[i] ?? line;
+      const state = !reached[i] ? 'pending' : counting && i === reached.length - 1 ? 'now' : '';
+      return `<li class="${state}"><span>${label}</span><b>${points}</b></li>`;
+    })
     .join('');
+  const total = reached.reduce((sum, line) => sum + line.points, 0);
   return `
     <div class="tally">
       <h2>${owner(player)} ${kind}</h2>
-      <div class="tally-cards">${cards.map(card => cardHtml(card)).join('')}<span class="plus">+</span>${cardHtml(game.starter)}</div>
+      <div class="tally-cards">${cards.map(card => cardHtml(card, light(card))).join('')}<span class="plus">+</span>${cardHtml(game.starter, light(game.starter))}</div>
       <ul>${lines || '<li><span>Nothing scores</span><b>–</b></li>'}<li class="total"><span>Total</span><b>${total}</b></li></ul>
     </div>`;
 }
 
 function promptText(me, acting) {
   if (dealing) return 'Shuffling and dealing…';
+  if (counting) return 'Counting. Tap to skip.';
   if (game.phase === 'discard' && acting) {
     return `Choose two cards for ${game.dealer === me ? 'your own' : `${name(game.dealer)}'s`} crib.`;
   }
   if (game.phase === 'play') {
     if (isAi(game.turn)) return 'Computer is thinking…';
+    if (acting && !legalCards(game, me).length) return 'None of your cards fits under 31. Press Go.';
     if (acting) return selected.length ? 'Tap it again, or press Play.' : 'Your turn. Choose a card to play.';
   }
   if (game.phase === 'show' && !game.show) return 'All the cards are played. Time to count the hands.';
@@ -209,9 +232,12 @@ function promptText(me, acting) {
 }
 
 function mainButton(acting) {
-  if (game.phase === 'show') return [['Count hands', 'Next hand', 'Count crib', 'Next deal'][game.showStep + 1], true];
+  if (game.phase === 'show') return [['Count hands', 'Next hand', 'Count crib', 'Next deal'][game.showStep + 1], !counting];
   if (game.phase === 'discard') return ['Send to crib', acting && selected.length === 2];
-  if (game.phase === 'play') return [selected.length ? `Play ${cardName(selected[0])}` : 'Play', acting && selected.length === 1];
+  if (game.phase === 'play') {
+    if (acting && !legalCards(game, actor()).length) return ['Go', true];
+    return [selected.length ? `Play ${cardName(selected[0])}` : 'Play', acting && selected.length === 1];
+  }
   return ['Game over', false];
 }
 
@@ -277,12 +303,14 @@ function render() {
   const acting = canAct();
   $('table').dataset.phase = game.phase;
 
+  // While a hand is counted out, the board waits at the scores from before it.
+  const board = counting ? counting.held : game;
   for (const seat of [0, 1]) {
     const score = document.querySelector(`.score[data-seat="${seat}"]`);
     score.querySelector('.name').textContent = name(seat);
-    score.querySelector('.points').textContent = game.scores[seat];
+    score.querySelector('.points').textContent = board.scores[seat];
     score.classList.toggle('active', actor() === seat);
-    for (const [which, hole] of pegHoles(seat)) {
+    for (const [which, hole] of pegHoles(seat, board)) {
       $('board').querySelector(`.peg.seat${seat}.${which}`).style.transform = pegTransform(seat, hole);
     }
   }
@@ -327,7 +355,8 @@ function render() {
     $('btn-reveal').textContent = `Show ${name(actor())}'s cards`;
   }
 
-  $('gameover').hidden = game.phase !== 'over';
+  // A game won on a count is announced once the count has been shown.
+  $('gameover').hidden = game.phase !== 'over' || Boolean(counting);
   if (game.phase === 'over') $('gameover-body').innerHTML = gameOverHtml();
 }
 
@@ -346,6 +375,8 @@ function describe(events) {
     .filter(Boolean);
 }
 
+const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
 // One sound for each thing that just happened, spaced so they do not pile up.
 function soundEvents(events) {
   let delay = 0;
@@ -362,7 +393,7 @@ function soundEvents(events) {
 // each is only drawn as if it started at the deck.
 function dealCards() {
   playSound('shuffle');
-  if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+  if (reducedMotion()) {
     render();
     return;
   }
@@ -401,13 +432,45 @@ function endDeal() {
   render();
 }
 
+// Counts a hand out one scoring combination at a time. `held` is the scores
+// and pegs from before the count; the board shows them until it is finished.
+function countOut(held) {
+  const steps = game.show.items.length;
+  counting = { done: 0, pace: Math.min(COUNT_STEP_MS, COUNT_MAX_MS / steps), held, timer: 0 };
+  countNext();
+}
+
+function countNext() {
+  if (counting.done === game.show.items.length) {
+    endCount();
+    return;
+  }
+  counting.done++;
+  playSound('count');
+  render();
+  counting.timer = setTimeout(countNext, counting.pace);
+}
+
+// Also called early, when a tap or key skips the animation. Only now do the
+// pegs move, and with them the sounds for the score and for a game won on it.
+function endCount() {
+  if (!counting) return;
+  clearTimeout(counting.timer);
+  counting = null;
+  soundEvents(game.events);
+  render();
+}
+
 // Runs one game action, then saves and redraws.
 function commit(action) {
+  const held = { scores: [...game.scores], back: [...game.back] };
+  const stepBefore = game.showStep;
   action();
   selected = [];
   tip = null;
   messages = describe(game.events);
   const dealt = game.phase === 'discard' && !game.crib.length;
+  const counted = Boolean(game.show) && game.showStep !== stepBefore; // a hand or crib was just scored
   if (dealt) revealedTo = null; // new deal: hide both hands again
   if (game.phase === 'over') {
     recordGame(stats, game);
@@ -416,17 +479,27 @@ function commit(action) {
   } else {
     store(GAME_KEY, game);
   }
-  soundEvents(game.events);
-  if (dealt) dealCards();
-  else render();
+
+  if (counted && game.show.items.length && !reducedMotion()) {
+    countOut(held);
+  } else {
+    soundEvents(game.events);
+    if (dealt) dealCards();
+    else render();
+  }
   scheduleAi();
 }
 
+// The computer's turn, after a pause: a card if one fits, otherwise go.
 function scheduleAi() {
   clearTimeout(aiTimer);
-  if (game.phase === 'play' && isAi(game.turn)) {
-    aiTimer = setTimeout(() => commit(() => playCard(game, AI, pickPlay(game, AI))), AI_DELAY);
-  }
+  if (game.phase !== 'play' || !isAi(game.turn)) return;
+  aiTimer = setTimeout(() => {
+    commit(() => {
+      if (legalCards(game, AI).length) playCard(game, AI, pickPlay(game, AI));
+      else go(game, AI);
+    });
+  }, AI_DELAY);
 }
 
 function onCard(card) {
@@ -444,6 +517,7 @@ function onCard(card) {
 }
 
 function onMain() {
+  if (counting) return;
   if (game.phase === 'show') {
     commit(() => advanceShow(game));
     return;
@@ -457,6 +531,8 @@ function onMain() {
       discard(game, seat, selected);
       if (isAi(1 - seat)) discard(game, AI, pickDiscard(game, AI));
     });
+  } else if (game.phase === 'play' && !legalCards(game, seat).length) {
+    commit(() => go(game, seat));
   } else if (game.phase === 'play' && selected.length === 1) {
     commit(() => playCard(game, seat, selected[0]));
   }
@@ -488,7 +564,9 @@ function toggleSound() {
 function showMenu() {
   clearTimeout(aiTimer);
   clearTimeout(dealTimer);
+  clearTimeout(counting?.timer);
   dealing = false;
+  counting = null;
   for (const group of document.querySelectorAll('.choice')) {
     for (const button of group.children) {
       button.setAttribute('aria-pressed', parseValue(button.dataset.value) === settings[group.dataset.setting]);
@@ -588,19 +666,39 @@ for (const button of document.querySelectorAll('[data-close]')) {
 }
 
 // Browsers only allow sound once the page has been tapped or typed at, so every
-// tap and key wakes the audio. Either one also skips a deal in progress.
+// tap and key wakes the audio. Either one also skips an animation in progress,
+// and then does nothing else: it must not also pick a card or press a button.
 for (const type of ['pointerdown', 'keydown']) {
   document.addEventListener(
     type,
     event => {
       unlockSound();
-      if (!dealing) return;
+      skipClick = dealing || Boolean(counting);
+      if (!skipClick) return;
       endDeal();
-      if (type === 'keydown') event.stopPropagation(); // it skipped the deal; it should not also pick a card
+      endCount();
+      if (type === 'keydown') {
+        event.stopPropagation();
+        // Stop Enter or Space pressing the focused button, but leave browser
+        // shortcuts such as reload alone.
+        if (event.key === 'Enter' || event.key === ' ') event.preventDefault();
+      }
     },
     true,
   );
 }
+
+// The click that follows a skipping tap is dropped before anything sees it.
+document.addEventListener(
+  'click',
+  event => {
+    if (!skipClick) return;
+    skipClick = false;
+    event.stopPropagation();
+    event.preventDefault();
+  },
+  true,
+);
 
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape') {

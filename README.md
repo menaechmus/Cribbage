@@ -7,11 +7,12 @@ It is a static page: plain HTML, CSS and JavaScript modules, with no build step 
 ## Play
 
 - Tap a card to choose it. When discarding, choose two and press **Send to crib**. During the play, tap the chosen card again or press **Play**.
+- When none of your cards fits under 31, the button becomes **Go** and you press it to pass.
 - **Hint** highlights the strongest move and says why. It can be switched off on the menu.
-- Each new hand is shuffled and dealt with a short animation; tap anywhere to skip it.
+- Each new hand is shuffled and dealt with a short animation, and each hand is counted out one scoring combination at a time. Tap anywhere to skip either.
 - Sound effects can be muted with the speaker button, the Sound setting on the menu, or `M`.
 - Keyboard: `1`–`6` choose a card, `Enter` confirms, `H` asks for a hint, `M` mutes.
-- Scores are counted for you, with a line-by-line breakdown of every hand and crib.
+- Scores are counted for you, with a breakdown of every hand and crib.
 - The **i** button on the menu shows which version is running.
 
 Settings, the game in progress and your statistics are kept in the browser's `localStorage`, so they stay on that device and browser and disappear if its site data is cleared.

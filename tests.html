@@ -16,7 +16,7 @@
 <script type="module">
 import { parseCard, parseCards, cardName, shuffledDeck } from './js/cards.js';
 import { scoreHand, handPoints, pegScore, summarize } from './js/scoring.js';
-import { newGame, deal, discard, playCard, advanceShow, legalCards, skunk } from './js/game.js';
+import { newGame, deal, discard, playCard, go, advanceShow, legalCards, skunk } from './js/game.js';
 import { rateDiscards, ratePlays, pickDiscard, pickPlay, hint } from './js/ai.js';
 import { emptyStats, loadStats, recordGame } from './js/stats.js';
 import { SOUNDS, renderSound } from './js/sound.js';
@@ -151,14 +151,13 @@ test('engine: a whole hand, with go, last card and the show', () => {
   discard(game, 1, parseCards('2S 3S'));
   equal([game.phase, game.turn, game.starter], ['play', 1, parseCard('4C')], 'after the cut');
 
-  const sequence = [[1, 'QD'], [0, 'KH'], [1, 'QC'], [0, 'KS'], [1, '8D'], [0, '9H'], [1, '8C'], [0, '9S']];
-  const goes = [];
-  for (const [player, card] of sequence) {
-    equal(game.turn, player, `turn before ${card}`);
-    playCard(game, player, parseCard(card));
-    for (const event of game.events) if (event.type === 'go') goes.push(event.player);
+  // Each step is a card played or, where nothing fits under 31, a go.
+  const sequence = [[1, 'QD'], [0, 'KH'], [1, 'QC'], [0, 'go'], [0, 'KS'], [1, '8D'], [0, '9H'], [1, 'go'], [1, '8C'], [0, '9S']];
+  for (const [player, move] of sequence) {
+    equal(game.turn, player, `turn before ${move}`);
+    if (move === 'go') go(game, player);
+    else playCard(game, player, parseCard(move));
   }
-  equal(goes, [0, 1], 'who said go');
   equal(game.scores, [2, 1], 'pegging scores');
   equal(game.phase, 'show', 'phase after pegging');
 
@@ -175,6 +174,45 @@ test('engine: a whole hand, with go, last card and the show', () => {
   advanceShow(game);
   equal([game.phase, game.dealer, game.deals - dealsBefore], ['discard', 1, 1], 'next deal goes to the other seat');
   equal([game.hands[0].length, game.hands[1].length, game.crib.length], [6, 6, 0], 'fresh hands');
+});
+
+test('engine: go is only for the player to move, and only when no card fits', () => {
+  const game = stackedGame('KH KS 9H 9S 2C 3C', 'QD QC 8D 8C 2S 3S', '4C');
+  discard(game, 0, parseCards('2C 3C'));
+  discard(game, 1, parseCards('2S 3S'));
+  throws(() => go(game, 1), 'go while a card can be played');
+  throws(() => go(game, 0), 'go out of turn');
+  for (const [player, card] of [[1, 'QD'], [0, 'KH'], [1, 'QC']]) playCard(game, player, parseCard(card));
+
+  equal([game.turn, legalCards(game, 0)], [0, []], 'the stuck player still has to act');
+  throws(() => playCard(game, 0, parseCard('KS')), 'card over 31');
+  go(game, 0);
+  equal(game.events.map(event => [event.type, event.player]), [['go', 0], ['score', 1]], 'go, then the point for it');
+  equal([game.scores, game.count, game.turn], [[0, 1], 0, 0], 'neither can play: a point, and the go-sayer leads');
+});
+
+test('engine: after a go the other player plays on alone', () => {
+  const stuck = pegPosition('KH', '4D 5D', 'QS QC 2S'); // count 22, seat 0 to move
+  go(stuck, 0);
+  equal([stuck.turn, stuck.scores], [1, [0, 0]], 'no point yet');
+  playCard(stuck, 1, parseCard('4D'));
+  equal([stuck.turn, stuck.count], [1, 26], 'not asked for go twice');
+  playCard(stuck, 1, parseCard('5D'));
+  equal([stuck.scores, stuck.count, stuck.turn], [[0, 2], 0, 0], 'thirty-one is two, with no extra point for the go');
+
+  const runsOut = pegPosition('KH', '4D 9D', 'QS QC 2S');
+  go(runsOut, 0);
+  playCard(runsOut, 1, parseCard('4D'));
+  equal([runsOut.scores, runsOut.count, runsOut.turn], [[0, 1], 0, 0], 'one for the go once nothing more fits');
+});
+
+test('engine: nobody says go to a player who is out of cards', () => {
+  const game = pegPosition('KH 5H', '', 'QS QC'); // count 20, seat 1 has no cards
+  playCard(game, 0, parseCard('KH'));
+  equal(game.events.map(event => event.type), ['play', 'score'], 'the point comes without a go');
+  equal([game.scores, game.count, game.turn], [[1, 0], 0, 0]);
+  playCard(game, 0, parseCard('5H'));
+  equal([game.scores, game.phase], [[2, 0], 'show'], 'last card');
 });
 
 test('engine: a Jack starter gives the dealer two', () => {
@@ -284,6 +322,11 @@ test('ai: orders its last cards for the fifteen once the opponent is out', () =>
   equal(cardName(ratePlays(game, 0)[0].card), '5♥');
 });
 
+test('ai: with no card to play, the hint is to say go', () => {
+  const tip = hint(pegPosition('KH', '4D', 'QS QC 2S'), 0);
+  equal([tip.cards, /\bgo\b/.test(tip.text)], [[], true]);
+});
+
 test('ai: discard hint names two cards from the hand', () => {
   const game = stackedGame('5H 5D 10S JC 2C 8D', 'QD QC 8H 8C 2S 3S', '4C');
   const tip = hint(game, 0);
@@ -365,7 +408,9 @@ function playOut(levels) {
       discard(game, 0, pickDiscard(game, 0, levels[0]));
       discard(game, 1, pickDiscard(game, 1, levels[1]));
     } else if (game.phase === 'play') {
-      playCard(game, game.turn, pickPlay(game, game.turn, levels[game.turn]));
+      const seat = game.turn;
+      if (legalCards(game, seat).length) playCard(game, seat, pickPlay(game, seat, levels[seat]));
+      else go(game, seat);
     } else {
       advanceShow(game);
     }

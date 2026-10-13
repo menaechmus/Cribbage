@@ -497,6 +497,22 @@ button {
   display: flex;
   align-items: center;
   gap: calc(var(--cw) * 0.08);
+  /* Room for the cards of the combination being counted to rise into. */
+  padding-top: calc(var(--cw) * 0.14);
+}
+
+/* Counting a hand out: the cards making the current combination stand up and
+   the rest fall back. */
+.tally .card.lit {
+  transform: translateY(-12%);
+  box-shadow: 0 0 0 3px var(--gold), 0 6px 10px rgba(0, 0, 0, 0.45);
+  animation: rise 0.18s ease-out;
+}
+
+.tally .card.unlit { filter: brightness(0.55); }
+
+@keyframes rise {
+  from { transform: none; }
 }
 
 .plus {
@@ -524,6 +540,10 @@ button {
   color: var(--gold);
   font-weight: 700;
 }
+
+/* Lines not yet reached keep their place, unseen, so the panel does not jump. */
+.tally li.pending { visibility: hidden; }
+.tally li.now { color: var(--gold); }
 
 .status {
   display: grid;
