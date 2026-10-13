@@ -253,8 +253,11 @@ button {
 
 .topbar {
   display: flex;
+  /* A last resort for very large text: the scores drop to a second row
+     instead of running off the screen. */
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .icon-btn {
@@ -267,17 +270,24 @@ button {
   font-size: 1.2rem;
 }
 
+/* The two scores share the bar equally, unless one name needs more room than
+   that to be shown in full. */
 .score {
   display: flex;
   flex: 1;
   align-items: center;
-  gap: 8px;
-  min-width: 0;
+  gap: 6px;
+  min-width: min-content;
   min-height: 44px;
-  padding: 4px 10px;
+  padding: 4px 8px;
   border: 2px solid transparent;
   border-radius: 10px;
   background: rgba(0, 0, 0, 0.28);
+}
+
+/* Too narrow for both names in full: shorten them with an ellipsis instead. */
+@media (max-width: 359px) {
+  .score { min-width: 0; }
 }
 
 .score.active { border-color: var(--gold); }
