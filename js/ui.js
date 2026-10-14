@@ -11,7 +11,7 @@ import { BOARD, holeXY, trackPath } from './board.js';
 
 // Shown in the About box. Bump both with every release: a browser still
 // running a cached copy of this file then shows the old number.
-const VERSION = '1.4.0';
+const VERSION = '1.4.1';
 const RELEASED = '13 October 2026';
 
 const AI = 1; // the computer always sits in seat 1
@@ -19,8 +19,8 @@ const AI_DELAY = 900;
 const SHUFFLE_MS = 560; // two riffles of the deck, as timed in the stylesheet
 const DEAL_GAP_MS = 60; // between one card leaving the deck and the next
 const FLIGHT_MS = 240; // a card's trip from the deck to a hand
-const COUNT_STEP_MS = 700; // each scoring combination stays up this long...
-const COUNT_MAX_MS = 4500; // ...unless a big hand would make the whole count drag
+const COUNT_STEP_MS = 1050; // each scoring combination stays up this long...
+const COUNT_MAX_MS = 6750; // ...unless a big hand would make the whole count drag
 const SETTINGS_KEY = 'cribbage.settings';
 const GAME_KEY = 'cribbage.game';
 const STATS_KEY = 'cribbage.stats';
