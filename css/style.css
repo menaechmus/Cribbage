@@ -193,6 +193,69 @@ button {
 .fan .card:nth-child(3) { transform: rotate(6deg); }
 .fan .card:nth-child(4) { transform: rotate(18deg) translateY(10px); }
 
+/* Sparkles on the title cards: small glints that twinkle at the outer corners
+   of the fan, half over the felt where they show. Each has its own rhythm, so
+   the pattern never visibly repeats and at most moments few or none are lit. */
+.fan .card::before,
+.fan .card:first-child::after,
+.fan .card:last-child::after {
+  --out: calc(var(--cw) * -0.17); /* centres a glint on a corner */
+  position: absolute;
+  top: var(--out);
+  left: var(--out);
+  width: calc(var(--cw) * 0.34);
+  height: calc(var(--cw) * 0.34);
+  /* A bright centre with one thin ray across and one down. */
+  background:
+    radial-gradient(circle, #fff 0 9%, transparent 24%),
+    radial-gradient(ellipse 50% 6% at center, #ffe9a3 0 35%, transparent 80%),
+    radial-gradient(ellipse 6% 50% at center, #ffe9a3 0 35%, transparent 80%);
+  content: '';
+  opacity: 0;
+  pointer-events: none;
+  animation: twinkle 6.1s ease-in-out -1s infinite;
+}
+
+.fan .card:first-child::after {
+  top: auto;
+  bottom: var(--out);
+  animation-duration: 8.3s;
+  animation-delay: -5.2s;
+}
+
+.fan .card:nth-child(2)::before {
+  animation-duration: 7.3s;
+  animation-delay: -3.4s;
+}
+
+.fan .card:nth-child(3)::before {
+  animation-duration: 5.3s;
+  animation-delay: -2.1s;
+}
+
+.fan .card:last-child::before {
+  right: var(--out);
+  left: auto;
+  animation-duration: 8.9s;
+  animation-delay: -6.5s;
+}
+
+.fan .card:last-child::after {
+  top: auto;
+  right: var(--out);
+  bottom: var(--out);
+  left: auto;
+  animation-duration: 6.7s;
+  animation-delay: -0.4s;
+}
+
+/* Out of sight for most of the cycle, then a quick grow, turn and fade. */
+@keyframes twinkle {
+  0% { opacity: 0; transform: scale(0.2) rotate(0deg); }
+  5.5% { opacity: 1; transform: scale(1) rotate(30deg); }
+  11%, 100% { opacity: 0; transform: scale(0.2) rotate(60deg); }
+}
+
 .options {
   display: grid;
   gap: 12px;
@@ -778,7 +841,9 @@ button {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  * {
+  *,
+  *::before,
+  *::after {
     animation: none !important;
     transition: none !important;
   }

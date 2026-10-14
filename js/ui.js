@@ -11,7 +11,7 @@ import { BOARD, holeXY, trackPath } from './board.js';
 
 // Shown in the About box. Bump both with every release: a browser still
 // running a cached copy of this file then shows the old number.
-const VERSION = '1.4.1';
+const VERSION = '1.4.2';
 const RELEASED = '13 October 2026';
 
 const AI = 1; // the computer always sits in seat 1
