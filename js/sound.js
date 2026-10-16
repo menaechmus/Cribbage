@@ -1,6 +1,9 @@
 // Sound effects, made on the spot with the Web Audio API so the game ships no
 // audio files. Every effect is built from two ingredients: a burst of filtered
-// noise (paper sliding, a card snapping down) and a short tone (a peg, a chime).
+// noise (paper sliding, a card snapping down) and a short tone (a peg, a
+// chime). The fanfare for a win is a brass ensemble of its own, in fanfare.js.
+
+import { playFanfare } from './fanfare.js';
 
 const noiseByContext = new WeakMap();
 
@@ -92,8 +95,18 @@ const EFFECTS = {
     tone(context, at, { length: 0.09, pitch: 1320, gain: 0.2, wave: 'triangle' });
   },
 
+  // About three seconds of brass and timpani, then the hall's ring.
   win(context, at) {
-    [523, 659, 784, 1047].forEach((pitch, i) => tone(context, at + i * 0.1, { length: 0.3, pitch, gain: 0.2, wave: 'triangle' }));
+    playFanfare(context, at, noiseFor(context));
+  },
+
+  // A firework bursting: a soft thump and bang, then a scatter of crackles.
+  firework(context, at) {
+    tone(context, at, { length: 0.2, pitch: 110, glide: 0.45, gain: 0.25 });
+    burst(context, at, { length: 0.16, pitch: 900, sweep: 0.4, gain: 0.4 });
+    for (let i = 0; i < 7; i++) {
+      burst(context, at + 0.12 + Math.random() * 0.4, { length: 0.012, pitch: 4000 + Math.random() * 2500, gain: 0.15 + Math.random() * 0.15 });
+    }
   },
 
   lose(context, at) {

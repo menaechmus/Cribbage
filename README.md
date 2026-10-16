@@ -10,6 +10,7 @@ It is a static page: plain HTML, CSS and JavaScript modules, with no build step 
 - When none of your cards fits under 31, the button becomes **Go** and you press it to pass.
 - **Hint** highlights the strongest move and says why. It can be switched off on the menu.
 - Each new hand is shuffled and dealt with a short animation, and each hand is counted out one scoring combination at a time. Tap anywhere to skip either.
+- A win is celebrated with fireworks, confetti and a brass fanfare before the final scores appear, and a skunk walks by after a skunk win. Tap to skip it.
 - Sound effects can be muted with the speaker button, the Sound setting on the menu, or `M`.
 - Keyboard: `1`–`6` choose a card, `Enter` confirms, `H` asks for a hint, `M` mutes.
 - Scores are counted for you, with a breakdown of every hand and crib.
@@ -47,5 +48,7 @@ Before pushing a change, raise `VERSION` and `RELEASED` at the top of `js/ui.js`
 | `js/board.js` | Pegboard geometry: where each hole sits along the S-shaped track |
 | `js/stats.js` | Lifetime statistics |
 | `js/sound.js` | Sound effects, generated with the Web Audio API (no audio files) |
+| `js/fanfare.js` | The win fanfare: an original tune for a generated brass ensemble with timpani, in a generated hall |
+| `js/celebrate.js` | Fireworks and confetti for a win, simulated and drawn on a canvas |
 | `js/ui.js` | Drawing, input, animation and storage |
-| `tests.html` | Tests for scoring, rules, the opponent, statistics and sound |
+| `tests.html` | Tests for scoring, rules, the opponent, statistics, the celebration and sound |

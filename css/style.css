@@ -840,6 +840,110 @@ button {
   padding-left: 1.2em;
 }
 
+/* Celebration. While a win is celebrated the game-over overlay is see-through
+   and its box invisible; then the backdrop darkens and the box grows into
+   place, in front of the last of the confetti. */
+
+#gameover { transition: background-color 0.4s; }
+#gameover.party { background: transparent; }
+
+#gameover-body {
+  position: relative;
+  z-index: 1;
+  transition: opacity 0.35s, transform 0.35s ease-out;
+}
+
+#gameover.party #gameover-body {
+  visibility: hidden;
+  opacity: 0;
+  transform: scale(0.92);
+}
+
+#party {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* A skunk crossing the bottom of the screen after a skunk win. The script
+   sets how long the walk takes and when it starts. */
+#skunk-walk {
+  position: fixed;
+  left: 0;
+  bottom: max(8px, env(safe-area-inset-bottom));
+  width: max(96px, calc(var(--size) * 1.9));
+  pointer-events: none;
+  animation: walk var(--walk, 4s) linear var(--delay, 0s) both;
+}
+
+#skunk-walk svg {
+  display: block;
+  width: 100%;
+  overflow: visible;
+  fill: #161616;
+  filter: drop-shadow(0 0 1.5px rgba(245, 241, 227, 0.7)); /* an outline against the dark felt */
+}
+
+#skunk-walk::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  left: 20%;
+  right: 6%;
+  bottom: -2px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+#skunk-walk .stripe {
+  fill: none;
+  stroke: #f5f1e3;
+  stroke-width: 5;
+  stroke-linecap: round;
+}
+
+#skunk-walk .stripe.thin { stroke-width: 3.5; }
+#skunk-walk .white { fill: #f5f1e3; }
+#skunk-walk .pink { fill: #f4a6b8; }
+
+/* Diagonal pairs of legs swing together, as in a trot. */
+#skunk-walk .leg {
+  transform-box: fill-box;
+  transform-origin: 50% 10%;
+  animation: stride 0.36s ease-in-out infinite alternate;
+}
+
+#skunk-walk .leg.b { animation-direction: alternate-reverse; }
+#skunk-walk .trunk { animation: bob 0.18s ease-in-out infinite alternate; }
+
+#skunk-walk .tail {
+  transform-box: fill-box;
+  transform-origin: 70% 95%;
+  animation: sway 0.72s ease-in-out infinite alternate;
+}
+
+@keyframes walk {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100vw); }
+}
+
+@keyframes stride {
+  from { transform: rotate(-22deg); }
+  to { transform: rotate(22deg); }
+}
+
+@keyframes bob {
+  to { transform: translateY(-1.2px); }
+}
+
+@keyframes sway {
+  from { transform: rotate(-5deg); }
+  to { transform: rotate(4deg); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

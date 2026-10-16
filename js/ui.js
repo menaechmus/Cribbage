@@ -8,11 +8,12 @@ import { pickDiscard, pickPlay, hint } from './ai.js';
 import { emptyStats, loadStats, recordGame } from './stats.js';
 import { playSound, setMuted, unlockSound } from './sound.js';
 import { BOARD, holeXY, trackPath } from './board.js';
+import { startParty } from './celebrate.js';
 
 // Shown in the About box. Bump both with every release: a browser still
 // running a cached copy of this file then shows the old number.
-const VERSION = '1.4.2';
-const RELEASED = '13 October 2026';
+const VERSION = '1.5.0';
+const RELEASED = '15 October 2026';
 
 const AI = 1; // the computer always sits in seat 1
 const AI_DELAY = 900;
@@ -21,6 +22,11 @@ const DEAL_GAP_MS = 60; // between one card leaving the deck and the next
 const FLIGHT_MS = 240; // a card's trip from the deck to a hand
 const COUNT_STEP_MS = 1050; // each scoring combination stays up this long...
 const COUNT_MAX_MS = 6750; // ...unless a big hand would make the whole count drag
+const CHEER_MS = 3500; // fireworks and confetti before the game-over box appears
+const SKUNK_AT_MS = 600; // after a skunk win a skunk sets off across the screen,
+const SKUNK_PACE = 260; // walking this many pixels a second,
+const SKUNK_MIN_MS = 3000; // but taking no less than this
+const SKUNK_MAX_MS = 4500; // and no more than this
 const SETTINGS_KEY = 'cribbage.settings';
 const GAME_KEY = 'cribbage.game';
 const STATS_KEY = 'cribbage.stats';
@@ -73,6 +79,8 @@ let pileShown = 0; // pile cards already drawn, so only new ones animate
 let starterShown = false; // likewise for the starter, which turns over once
 let dealing = false; // the shuffle-and-deal animation is running
 let counting = null; // while a hand is counted out: { done, pace, held, timer }
+let celebrating = 0; // timer while a win is celebrated and the game-over box waits
+let party = null; // the fireworks and confetti, which outlast the celebration a little
 let skipClick = false; // the tap that skipped an animation should do nothing else
 let turnUp = false; // the next redraw turns the bottom hand face-up
 let resetArmed = false;
@@ -336,8 +344,10 @@ function render() {
     $('btn-reveal').textContent = `Show ${name(actor())}'s cards`;
   }
 
-  // A game won on a count is announced once the count has been shown.
+  // A game won on a count is announced once the count has been shown, and a
+  // win once it has been celebrated.
   $('gameover').hidden = game.phase !== 'over' || Boolean(counting);
+  $('gameover').classList.toggle('party', Boolean(celebrating));
   if (game.phase === 'over') $('gameover-body').innerHTML = gameOverHtml();
 }
 
@@ -439,7 +449,48 @@ function endCount() {
   clearTimeout(counting.timer);
   counting = null;
   soundEvents(game.events);
+  celebrate();
   render();
+}
+
+// A win by a person is celebrated before the game-over box appears: fireworks
+// and confetti, and on a skunk a skunk walking by. A win for the computer goes
+// straight to the box. Called just before the redraw that shows the end.
+function celebrate() {
+  if (game.phase !== 'over' || isAi(game.winner) || reducedMotion()) return;
+  party = startParty($('party'), () => playSound('firework'));
+  let wait = CHEER_MS;
+  if (skunk(game)) wait = Math.max(wait, SKUNK_AT_MS + walkSkunk() + 200);
+  celebrating = setTimeout(() => endCelebration(), wait);
+}
+
+// Sends the skunk across the bottom of the screen and says how long it takes.
+function walkSkunk() {
+  const walker = $('skunk-walk');
+  const distance = innerWidth + 150; // the screen and about the skunk's own length
+  const ms = Math.min(SKUNK_MAX_MS, Math.max(SKUNK_MIN_MS, (1000 * distance) / SKUNK_PACE));
+  walker.style.setProperty('--walk', `${ms}ms`);
+  walker.style.setProperty('--delay', `${SKUNK_AT_MS}ms`);
+  walker.hidden = false;
+  return ms;
+}
+
+// Shows the game-over box. Also called early, when a tap or key skips the
+// celebration; then the fireworks stop too, instead of fading out behind it.
+function endCelebration(skipped = false) {
+  if (!celebrating) return;
+  clearTimeout(celebrating);
+  celebrating = 0;
+  if (skipped) stopParty();
+  render();
+}
+
+function stopParty() {
+  clearTimeout(celebrating);
+  celebrating = 0;
+  party?.stop();
+  party = null;
+  $('skunk-walk').hidden = true;
 }
 
 // Runs one game action, then saves and redraws.
@@ -465,6 +516,7 @@ function commit(action) {
     countOut(held);
   } else {
     soundEvents(game.events);
+    celebrate();
     if (dealt) dealCards();
     else render();
   }
@@ -548,6 +600,7 @@ function showMenu() {
   clearTimeout(counting?.timer);
   dealing = false;
   counting = null;
+  stopParty();
   for (const group of document.querySelectorAll('.choice')) {
     for (const button of group.children) {
       button.setAttribute('aria-pressed', parseValue(button.dataset.value) === settings[group.dataset.setting]);
@@ -566,6 +619,7 @@ function showMenu() {
 }
 
 function start(saved = null) {
+  stopParty();
   game = saved ?? newGame(settings);
   selected = [];
   tip = null;
@@ -621,6 +675,10 @@ $('bottom-hand').addEventListener('click', event => {
   if (card) onCard(Number(card.dataset.card));
 });
 
+$('skunk-walk').addEventListener('animationend', event => {
+  if (event.animationName === 'walk') event.currentTarget.hidden = true;
+});
+
 $('gameover').addEventListener('click', event => {
   const action = event.target.dataset.do;
   if (action === 'again') start();
@@ -654,8 +712,9 @@ for (const type of ['pointerdown', 'keydown']) {
     type,
     event => {
       unlockSound();
-      skipClick = dealing || Boolean(counting);
+      skipClick = dealing || Boolean(counting) || Boolean(celebrating);
       if (!skipClick) return;
+      endCelebration(true); // first, as a count that wins the game starts one
       endDeal();
       endCount();
       if (type === 'keydown') {
