@@ -109,6 +109,12 @@ const EFFECTS = {
     }
   },
 
+  // Your turn, in a Wi-Fi game: two soft notes, up a fourth.
+  turn(context, at) {
+    tone(context, at, { length: 0.16, pitch: 784, gain: 0.16, wave: 'triangle' });
+    tone(context, at + 0.13, { length: 0.34, pitch: 1046, gain: 0.16, wave: 'triangle' });
+  },
+
   lose(context, at) {
     [392, 330, 262].forEach((pitch, i) => tone(context, at + i * 0.14, { length: 0.32, pitch, gain: 0.2, wave: 'triangle' }));
   },

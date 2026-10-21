@@ -28,6 +28,7 @@
       <div class="choice" data-setting="mode">
         <button data-value="ai">Computer</button>
         <button data-value="local">People</button>
+        <button data-value="net">Wi-Fi</button>
       </div>
     </div>
     <div class="option" id="row-difficulty">
@@ -53,6 +54,10 @@
       <input data-name="3" maxlength="12" placeholder="Player 4" aria-label="Player 4 name" autocomplete="off" spellcheck="false">
     </div>
     <p class="muted partners" id="row-partners">Partners: players 1 and 3 against 2 and 4.</p>
+    <div class="option" id="row-wifi-name">
+      <label for="wifi-name">Your name</label>
+      <input id="wifi-name" class="wifi-name" maxlength="12" placeholder="Needed to play" autocomplete="off" spellcheck="false">
+    </div>
     <div class="option">
       <span>Play to</span>
       <div class="choice" data-setting="target">
@@ -79,6 +84,10 @@
   <div class="menu-actions">
     <button id="btn-resume" class="btn primary" hidden>Resume game</button>
     <button id="btn-new" class="btn primary">New game</button>
+    <div class="row" id="row-wifi">
+      <button id="btn-host" class="btn primary">Host a game</button>
+      <button id="btn-join" class="btn primary">Join a game</button>
+    </div>
     <div class="row">
       <button id="btn-stats" class="btn">Statistics</button>
       <button id="btn-rules" class="btn">How to play</button>
@@ -136,6 +145,42 @@
   </div>
 </div>
 
+<div id="wifi" class="overlay" hidden>
+  <div class="dialog">
+    <h2 id="wifi-title">Wi-Fi game</h2>
+    <p id="wifi-text" class="muted"></p>
+    <div id="wifi-code" class="wifi-code" role="img" hidden></div>
+    <input id="join-code" class="join-code" maxlength="4" placeholder="CODE" aria-label="Code" autocomplete="off" autocapitalize="characters" spellcheck="false" hidden>
+    <button id="btn-share" class="btn share" hidden>Share link</button>
+    <ul id="wifi-players" class="wifi-players" aria-label="Players" hidden></ul>
+    <p id="wifi-partners" class="muted" hidden></p>
+    <div id="wifi-computers" class="wifi-computers" hidden>
+      <span class="muted">Add the computer:</span>
+      <div class="choice">
+        <button data-level="easy">Easy</button>
+        <button data-level="medium">Medium</button>
+        <button data-level="hard">Hard</button>
+      </div>
+    </div>
+    <p id="wifi-status" class="wifi-status" aria-live="polite"></p>
+    <div class="row">
+      <button id="btn-wifi-cancel" class="btn">Cancel</button>
+      <button id="btn-wifi-go" class="btn primary">Start</button>
+    </div>
+  </div>
+</div>
+
+<div id="confirm" class="overlay" hidden>
+  <div class="dialog">
+    <h2 id="confirm-title"></h2>
+    <p id="confirm-text" class="muted"></p>
+    <div class="row">
+      <button class="btn" data-close>Cancel</button>
+      <button id="btn-confirm" class="btn primary"></button>
+    </div>
+  </div>
+</div>
+
 <div id="gameover" class="overlay" hidden>
   <canvas id="party" width="0" height="0" aria-hidden="true"></canvas>
   <div id="skunk-walk" aria-hidden="true" hidden>
@@ -186,6 +231,7 @@
       <li><b>Three or four players.</b> Each is dealt five cards and sends one to the crib; with three, one more card goes to the crib from the deck. Three play each for themselves, on a board with three lanes. Four play as two partnerships, players 1 and 3 against 2 and 4, each pair sharing a score.</li>
       <li><b>Winning.</b> The first peg to reach the last hole wins at once, even in the middle of a hand.</li>
     </ol>
+    <p class="muted">Wi-Fi: everyone plays on their own phone. One person chooses Wi-Fi on the menu, types a name and taps Host a game; the others choose Wi-Fi, tap Join a game and enter the four letters on the host's screen, or open the link the host shares. The host can also add computer players, which play from the host's phone, and the host's game length and hints apply to everyone. A phone that drops out comes back by itself, and while it is away the host can play for it.</p>
     <p class="muted">Tap a card to choose it. During the play, tap it again or press Play. Tap anywhere to skip the deal, a count or a celebration. On a keyboard: 1–6 choose a card, Enter confirms, H asks for a hint and M mutes the sound.</p>
     <button class="btn primary" data-close>Got it</button>
   </div>

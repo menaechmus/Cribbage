@@ -9,6 +9,7 @@
   --seat0: #62b5ff;
   --seat1: #ff7f61;
   --seat2: #ffd54a;
+  --warn: #ffb4a3;
   /* The board's height as a share of its width: taller with three lanes. */
   --board-ratio: 0.244;
   /* The rows of fixed height on the table (bars, buttons, status), which a
@@ -104,7 +105,7 @@ button {
   color: #2b2205;
 }
 
-.btn.danger { color: #ffb4a3; }
+.btn.danger { color: var(--warn); }
 
 .btn:disabled {
   opacity: 0.45;
@@ -328,6 +329,23 @@ button {
 
 .partners { text-align: center; }
 
+/* One name for a Wi-Fi game, which the other phones see. */
+.wifi-name {
+  flex: 0 1 220px;
+  min-width: 0;
+  min-height: 40px;
+  padding: 6px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--ink);
+  font: inherit;
+}
+
+.wifi-name::placeholder { color: var(--muted); }
+.wifi-name.want { border-color: var(--warn); }
+.wifi-name.want::placeholder { color: var(--warn); }
+
 .menu-actions {
   display: grid;
   gap: 10px;
@@ -433,6 +451,9 @@ button {
 .table[data-players='4'] .score { min-width: 0; }
 
 .score.active { border-color: var(--gold); }
+
+/* A Wi-Fi player whose phone is out of touch. */
+.score.away { opacity: 0.45; }
 
 .score i {
   flex: none;
@@ -766,6 +787,7 @@ button {
 
 #prompt { color: var(--muted); }
 #prompt.tip { color: var(--tip); }
+#prompt.warn { color: var(--warn); }
 
 .actions {
   display: flex;
@@ -941,6 +963,111 @@ button {
   color: var(--gold);
   font-weight: 700;
 }
+
+/* The Wi-Fi box: the host's code as four cards, the code typed to join, and
+   who is in the game. */
+.wifi-code {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  --cw: 50px;
+}
+
+.wifi-code .card {
+  display: grid;
+  place-items: center;
+  font-size: 1.7rem;
+}
+
+.wifi-code .card:nth-child(odd) { transform: rotate(-3deg); }
+.wifi-code .card:nth-child(even) { transform: rotate(2.5deg) translateY(2px); }
+
+.join-code {
+  justify-self: center;
+  width: 8.5em;
+  min-height: 52px;
+  padding: 6px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--ink);
+  font: inherit;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.join-code::placeholder {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.btn.share {
+  justify-self: center;
+  min-height: 40px;
+  padding: 6px 16px;
+}
+
+.wifi-players {
+  display: grid;
+  gap: 4px;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+}
+
+.wifi-players li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 2px 4px 2px 12px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.wifi-players li.away { opacity: 0.45; }
+
+.wifi-players i {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--seat0);
+}
+
+.wifi-players i.side1 { background: var(--seat1); }
+.wifi-players i.side2 { background: var(--seat2); }
+
+/* Takes a computer player out of the lobby. */
+.wifi-players .remove {
+  min-width: 32px;
+  min-height: 32px;
+  margin-left: auto;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+/* The host seats a computer player at the level tapped. */
+.wifi-computers {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+}
+
+.wifi-computers .choice button {
+  padding-inline: 12px;
+  color: var(--ink);
+}
+
+.wifi-status { min-height: 1.4em; color: var(--muted); }
+.wifi-status.warn { color: var(--warn); }
 
 .grid {
   width: 100%;

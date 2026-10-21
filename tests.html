@@ -22,6 +22,8 @@ import { emptyStats, loadStats, recordGame } from './js/stats.js';
 import { SOUNDS, renderSound } from './js/sound.js';
 import { boardFor, holeXY, trackPath } from './js/board.js';
 import { createShow, advance, isOver } from './js/celebrate.js';
+import { newCode, cleanCode, linkPair } from './js/net.js';
+import { createHost, createGuest, cleanMove, seatView, sameState, deniedText, HIDDEN, MAX_PLAYERS } from './js/wifi.js';
 
 const results = [];
 const notes = [];
@@ -34,6 +36,18 @@ function test(name, body) {
     results.push({ name, ok: false, error: error.message });
   }
 }
+
+async function testAsync(name, body) {
+  try {
+    await body();
+    results.push({ name, ok: true });
+  } catch (error) {
+    results.push({ name, ok: false, error: error.message });
+  }
+}
+
+// Long enough for a few hops between links: nested timers wait 4 ms at least.
+const tick = (ms = 40) => new Promise(resolve => setTimeout(resolve, ms));
 
 function equal(actual, expected, label = 'value') {
   const a = JSON.stringify(actual);
@@ -656,6 +670,298 @@ for (const laneCount of [2, 3]) for (const [name, parts] of Object.entries(board
 
   notes.push(`${label}: holes ${pitch.toFixed(2)} apart on the straights, ${distance(at(outer, parts.bendOne[0]), at(outer, parts.bendOne[0] + 1)).toFixed(2)} on the inside of a bend, ${distance(at(0, parts.bendOne[0]), at(0, parts.bendOne[0] + 1)).toFixed(2)} on the outside`);
 }
+
+// ---- Wi-Fi --------------------------------------------------------------
+
+const V = '9.9.9';
+
+test('net: codes are four capitals with no I or O, and typed ones are cleaned', () => {
+  for (let i = 0; i < 300; i++) {
+    const code = newCode();
+    if (!/^[A-HJ-NP-Z]{4}$/.test(code)) throw new Error(`bad code ${code}`);
+  }
+  equal(cleanCode(' kq-zt9x'), 'KQZT', 'typed');
+});
+
+await testAsync('net: a link pair carries JSON both ways, and closing one end closes both', async () => {
+  const [a, b] = linkPair();
+  const heard = { a: [], b: [] };
+  let closed = 0;
+  a.onmessage = message => heard.a.push(message);
+  b.onmessage = message => heard.b.push(message);
+  a.onclose = () => closed++;
+  b.onclose = () => closed++;
+  a.send({ t: 'x', list: [1, 2], text: 'é' });
+  b.send({ t: 'y' });
+  await tick();
+  equal(heard, { a: [{ t: 'y' }], b: [{ t: 'x', list: [1, 2], text: 'é' }] }, 'heard');
+  a.close();
+  await tick();
+  equal([a.open, b.open, closed], [false, false, 2], 'closed');
+  a.send({ t: 'late' });
+  await tick();
+  equal(heard.b.length, 1, 'nothing after closing');
+});
+
+// A host and guests over in-memory links. Each guest keeps what it hears.
+function wifiTable({ seats = null } = {}) {
+  const moves = [];
+  const host = createHost({ name: 'Hana', version: V, seats, onmove: (seat, move) => moves.push([seat, move]) });
+  const guest = (name, token = name, version = V) => {
+    const [link, end] = linkPair();
+    host.attach(end);
+    const heard = [];
+    link.onmessage = message => heard.push(message);
+    link.send({ t: 'hello', name, token, version });
+    return { link, heard, last: t => heard.filter(message => message.t === t).at(-1) };
+  };
+  return { host, moves, guest };
+}
+
+await testAsync('wifi: the lobby fills to four, with every name its own, and then turns players away', async () => {
+  const { host, guest } = wifiTable();
+  const ann = guest('Ann');
+  guest('  ann ', 'another');
+  const bob = guest('Bob');
+  await tick();
+  equal(host.players().map(player => player.name), ['Hana', 'Ann', 'ann 2', 'Bob'], 'names');
+  equal(bob.last('lobby'), { t: 'lobby', seat: 3, players: host.players() }, 'what Bob hears');
+  equal(ann.last('lobby').seat, 1, 'Ann sits next to the host');
+  const cy = guest('Cy');
+  const old = guest('Dee', 'Dee', '1.0.0');
+  const nameless = guest('   ', 'x');
+  await tick();
+  equal(cy.last('denied'), { t: 'denied', why: 'full', version: V }, 'a fifth player');
+  equal(deniedText(cy.last('denied'), V), `That game already has ${MAX_PLAYERS} players.`, 'said');
+  equal(old.last('denied').why, 'version', 'another version');
+  equal(deniedText(old.last('denied'), '1.0.0'), `This phone has version 1.0.0 of the game and the host's has ${V}. Reload the page on the older one, then join again.`, 'said');
+  equal(nameless.last('denied').why, 'name', 'no name');
+});
+
+await testAsync('wifi: in the lobby a player who drops out loses the seat, and the others move up', async () => {
+  const { host, guest } = wifiTable();
+  const ann = guest('Ann');
+  const bob = guest('Bob');
+  await tick();
+  ann.link.close();
+  await tick();
+  equal(host.players().map(player => player.name), ['Hana', 'Bob'], 'players');
+  equal(bob.last('lobby').seat, 1, 'Bob moved up');
+});
+
+await testAsync('wifi: once started, a stranger is turned away, and a returning player gets the seat back', async () => {
+  const { host, guest } = wifiTable();
+  const ann = guest('Ann');
+  guest('Bob');
+  await tick();
+  equal(host.begin(), [{ name: 'Hana' }, { name: 'Ann' }, { name: 'Bob' }], 'players');
+  const dee = guest('Dee');
+  await tick();
+  equal(dee.last('denied').why, 'started', 'a stranger');
+  ann.link.close();
+  await tick();
+  equal(host.away(), [false, true, false], 'Ann away');
+  const back = guest('Ann', 'Ann');
+  await tick();
+  equal(host.away(), [false, false, false], 'Ann back, by her token');
+  back.link.close();
+  await tick();
+  const again = guest('ANN', 'a new tab');
+  await tick();
+  equal([host.away(), host.saved()[1]], [[false, false, false], { name: 'Ann', token: 'a new tab' }], 'Ann back, by her name');
+  const twin = guest('Ann', 'yet another');
+  await tick();
+  equal(twin.last('denied').why, 'started', 'but not while she is there');
+  equal(again.link.open, true, 'Ann still in');
+});
+
+await testAsync('wifi: a move goes to the host with the seat of the link it came on, cleaned', async () => {
+  const { host, guest, moves } = wifiTable();
+  const ann = guest('Ann');
+  const bob = guest('Bob');
+  await tick();
+  ann.link.send({ t: 'go' });
+  await tick();
+  equal(moves, [], 'nothing before the start');
+  host.begin();
+  bob.link.send({ t: 'discard', seat: 0, cards: [5, 40], extra: 'x' });
+  ann.link.send({ t: 'play', card: 51 });
+  ann.link.send({ t: 'go', card: 3 });
+  bob.link.send({ t: 'next', step: 1 });
+  bob.link.send({ t: 'play', card: 52 });
+  bob.link.send({ t: 'deal', anything: true });
+  await tick();
+  equal(moves, [[2, { t: 'discard', cards: [5, 40] }], [1, { t: 'play', card: 51 }], [1, { t: 'go' }], [2, { t: 'next', step: 1 }]], 'moves');
+});
+
+test('wifi: moves that are not the right shape are dropped', () => {
+  for (const bad of [
+    { t: 'discard', cards: [] },
+    { t: 'discard', cards: [1, 2, 3] },
+    { t: 'discard', cards: [1, 52] },
+    { t: 'discard', cards: [1, 2.5] },
+    { t: 'discard', cards: ['1'] },
+    { t: 'discard', cards: 'all' },
+    { t: 'play', card: -1 },
+    { t: 'play', card: '7' },
+    { t: 'play' },
+    { t: 'next', step: 'on' },
+    { t: 'next', step: 9 },
+    { t: 'next' },
+    null,
+  ]) {
+    if (cleanMove(bad) !== null) throw new Error(`kept ${JSON.stringify(bad)}`);
+  }
+  equal(cleanMove({ t: 'go', cards: [1] }), { t: 'go' }, 'a go');
+});
+
+test('wifi: each phone sees its own cards, and only how many the others hold', () => {
+  const game = stackedTable(['5H 5D JS 2C 8C', '5S 5C 10H 3D 7D', 'KH QH 9D 4C 6H', 'AH 3H 7S 9C KC'], '10S', { dealer: 3 });
+  Object.assign(game, { mode: 'net', net: { code: 'KQZT', seats: [{ name: 'Hana', token: null }, { name: 'Ann', token: 'secret' }] } });
+  // Seat 1 throws first, before the others have, then everyone else.
+  discard(game, 1, parseCards('3D'));
+  const early = seatView(game, 0);
+  equal([early.discards[1], early.crib, early.cut], [[HIDDEN], [HIDDEN], HIDDEN], 'a card thrown and the card to be cut stay hidden');
+  [[0, '2C'], [3, '9C'], [2, '4C']].forEach(([seat, card]) => discard(game, seat, parseCards(card)));
+  playCard(game, 0, parseCard('5H'));
+  const view = seatView(game, 1);
+  equal(view.hands[1], game.hands[1], 'its own hand');
+  equal(view.hands.map(hand => hand.length), game.hands.map(hand => hand.length), 'how many each holds');
+  const others = [0, 2, 3];
+  const secret = others.flatMap(seat => [...game.hands[seat], ...game.kept[seat], ...game.discards[seat]]).concat(game.crib.filter(card => !game.discards[1].includes(card)));
+  const seen = [...view.hands.flat(), ...view.kept.flat(), ...view.discards.flat(), ...view.crib, view.cut];
+  const leaked = seen.filter(card => card !== HIDDEN && secret.includes(card) && !game.pile.some(played => played.card === card));
+  equal(leaked, [], 'no card of anyone else\'s');
+  equal([view.starter, view.pile, view.scores, view.id], [game.starter, game.pile, game.scores, game.id], 'the starter, the play and the scores');
+  equal('net' in view, false, 'no tokens');
+  Object.assign(game, { phase: 'show' });
+  advanceShow(game);
+  equal(seatView(game, 1).show.cards, game.kept[0], 'a hand is seen as it is counted');
+});
+
+test('wifi: a guest knows a state it has had', () => {
+  const game = newGame({ mode: 'net', players: [{ name: 'Hana' }, { name: 'Ann' }] });
+  const copy = JSON.parse(JSON.stringify(game));
+  equal(sameState(game, copy), true, 'the same');
+  discard(copy, 0, copy.hands[0].slice(0, 2));
+  equal(sameState(game, copy), false, 'a move more');
+  equal(sameState(null, game), false, 'no game yet');
+});
+
+test('wifi: phones throw their cards in any order, at the same time', () => {
+  const game = stackedTable(['AH 2H 3H 4H 5H', 'AS 2S 3S 4S 5S', 'AD 2D 3D 4D 5D'], 'KC', { dealer: 0, crib: 'QC' });
+  discard(game, 2, parseCards('AD'));
+  discard(game, 0, parseCards('AH'));
+  throws(() => discard(game, 2, parseCards('2D')), 'a second throw');
+  discard(game, 1, parseCards('AS'));
+  equal([game.phase, game.turn], ['play', 1], 'all in, and play begins left of the dealer');
+});
+
+await testAsync('wifi: the host seats computers in the lobby, named by their level, and they count towards four', async () => {
+  const { host, guest } = wifiTable();
+  const gus = guest('Gus');
+  await tick();
+  equal([host.addComputer('hard'), host.addComputer('hard')], [true, true], 'two added');
+  equal(host.players().map(player => player.name), ['Hana', 'Gus', 'Hard', 'Hard 2'], 'names');
+  equal(host.addComputer('easy'), false, 'no room for a fifth');
+  const late = guest('Ann');
+  await tick();
+  equal(late.last('denied').why, 'full', 'nor for a person');
+  equal(gus.last('lobby').players[2], { name: 'Hard', here: true, ai: true, level: 'hard' }, 'Gus sees the computer');
+  equal([host.removeComputer(1), host.removeComputer(3)], [false, true], 'a person is not taken out, a computer is');
+  guest('hard', 'another tab');
+  await tick();
+  equal(host.players().map(player => player.name), ['Hana', 'Gus', 'Hard', 'hard 2'], 'a person who wants the name gets another');
+  equal(host.begin(), [{ name: 'Hana' }, { name: 'Gus' }, { name: 'Hard', ai: true, level: 'hard' }, { name: 'hard 2' }], 'as newGame takes them');
+  equal(host.away(), [false, false, false, false], 'a computer is never away');
+  equal(host.saved()[2], { name: 'Hard', token: null, ai: true, level: 'hard' }, 'saved with its level');
+  equal(host.addComputer('easy'), false, 'none added once started');
+  const game = newGame({ mode: 'net', players: host.begin() });
+  equal([game.players[2].ai, game.players[2].level, game.players[1].ai], [true, 'hard', false], 'a game with them');
+});
+
+await testAsync('wifi: a reopened game keeps its computers, whose seats nobody can take', async () => {
+  const seats = [{ name: 'Hana', token: null }, { name: 'Gus', token: 'tab1' }, { name: 'Easy', token: null, ai: true, level: 'easy' }];
+  const { host, guest } = wifiTable({ seats });
+  equal(host.away(), [false, true, false], 'the computer is there, Gus is not');
+  const pretender = guest('Easy', 'tab9');
+  await tick();
+  equal(pretender.last('denied').why, 'started', 'nobody takes the computer\'s seat by its name');
+  guest('Gus', 'tab1');
+  await tick();
+  equal([host.away(), host.players()[2]], [[false, false, false], { name: 'Easy', here: true, ai: true, level: 'easy' }], 'Gus back, the computer kept');
+});
+
+// A guest dialling a host over in-memory links, as net.js would.
+function dialling(host, { fail = null } = {}) {
+  const links = [];
+  const connect = async () => {
+    if (fail) throw new Error(fail);
+    const [link, end] = linkPair();
+    host.attach(end);
+    links.push(link);
+    return link;
+  };
+  return { links, connect };
+}
+
+await testAsync('wifi: a guest joins, hears the game, loses the link, dials again by itself and is back', async () => {
+  const changes = [];
+  let game = null;
+  // As the page does: whenever someone comes back, everyone is sent the game.
+  const onchange = change => {
+    changes.push(change);
+    if (game) host.share(game);
+  };
+  const host = createHost({ name: 'Hana', version: V, onmove: () => {}, onchange });
+  const { links, connect } = dialling(host);
+  const heard = [];
+  const ups = [];
+  const guest = createGuest({ name: 'Ann', token: 'tab1', version: V, connect, onmessage: message => heard.push(message), onlink: up => ups.push(up), retryMs: 20 });
+  await guest.join();
+  equal([guest.connected, heard.map(message => message.t)], [true, ['lobby']], 'in the lobby');
+  game = newGame({ mode: 'net', players: host.begin() });
+  host.share(game);
+  await tick();
+  const state = heard.at(-1);
+  equal([state.t, state.seat, state.game.hands[1], state.game.hands[0].every(card => card === HIDDEN)], ['state', 1, game.hands[1], true], 'its own view of the game');
+  links[0].close();
+  await tick(60);
+  equal([links.length, ups, host.away()], [2, [true, false, true], [false, false]], 'back on a second link');
+  equal(guest.send({ t: 'go' }), true, 'and can move');
+  equal(changes.map(change => change.joined), [true, false, true], 'the host heard it all');
+});
+
+await testAsync('wifi: a guest stops when the host ends the game, and a failed join says why', async () => {
+  const host = createHost({ name: 'Hana', version: V, onmove: () => {} });
+  const { links, connect } = dialling(host);
+  const heard = [];
+  const guest = createGuest({ name: 'Ann', token: 'tab1', version: V, connect, onmessage: message => heard.push(message), retryMs: 10 });
+  await guest.join();
+  host.close('ended');
+  await tick(600);
+  equal([heard.at(-1), guest.connected, links.length], [{ t: 'closed', why: 'ended' }, false, 1], 'stopped, no more dialling');
+
+  const old = createGuest({ name: 'Bob', token: 'tab2', version: '1.0.0', connect: dialling(createHost({ name: 'Hana', version: V, onmove: () => {} })).connect });
+  let said = '';
+  await old.join().catch(error => (said = error.message));
+  equal(said, deniedText({ why: 'version', version: V }, '1.0.0'), 'another version');
+
+  const lost = createGuest({ name: 'Cy', token: 'tab3', version: V, connect: dialling(host, { fail: 'No game has that code.' }).connect });
+  said = '';
+  await lost.join().catch(error => (said = error.message));
+  equal(said, 'No game has that code.', 'no such game');
+});
+
+await testAsync('wifi: a saved game reopened keeps its seats, all away until their phones come back', async () => {
+  const seats = [{ name: 'Hana', token: null }, { name: 'Ann', token: 'tab1' }, { name: 'Bob', token: 'tab2' }];
+  const { host, guest } = wifiTable({ seats });
+  equal([host.started, host.away()], [true, [false, true, true]], 'reopened');
+  guest('Bob', 'tab2');
+  const stranger = guest('Ann', 'tab9', '0.1');
+  await tick();
+  equal([host.away(), stranger.last('denied').why], [[false, true, false], 'version'], 'Bob is back');
+});
 
 // ---- Celebration --------------------------------------------------------
 
