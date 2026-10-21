@@ -1,12 +1,14 @@
 # Cribbage
 
-Two-handed cribbage for the browser. Play against the computer (easy, medium or hard) or pass one device between two players. Works with touch, mouse and keyboard, on phones and desktops.
+Cribbage for the browser. Play against the computer (easy, medium or hard), or pass one device between two, three or four people. Works with touch, mouse and keyboard, on phones and desktops.
 
 It is a static page: plain HTML, CSS and JavaScript modules, with no build step and no dependencies.
 
 ## Play
 
-- Tap a card to choose it. When discarding, choose two and press **Send to crib**. During the play, tap the chosen card again or press **Play**.
+- **People** on the menu is for two, three or four people sharing one device. Each can type a name. A cover asks to pass the device whenever someone else must act, and their cards stay face-down until they show them.
+- Three players each get five cards and throw one to the crib, which also gets one card from the deck; the board has a third lane. Four players play as two partnerships, players 1 and 3 against 2 and 4, each pair sharing a score and a lane.
+- Tap a card to choose it. When discarding, choose two (one with three or four players) and press **Send to crib**. During the play, tap the chosen card again or press **Play**.
 - When none of your cards fits under 31, the button becomes **Go** and you press it to pass.
 - **Hint** highlights the strongest move and says why. It can be switched off on the menu.
 - Each new hand is shuffled and dealt with a short animation, and each hand is counted out one scoring combination at a time. Tap anywhere to skip either.
@@ -14,6 +16,7 @@ It is a static page: plain HTML, CSS and JavaScript modules, with no build step 
 - Sound effects can be muted with the speaker button, the Sound setting on the menu, or `M`.
 - Keyboard: `1`–`6` choose a card, `Enter` confirms, `H` asks for a hint, `M` mutes.
 - Scores are counted for you, with a breakdown of every hand and crib.
+- **Statistics** keeps your record against each computer level, and games between people by name.
 - The **i** button on the menu shows which version is running.
 
 Settings, the game in progress and your statistics are kept in the browser's `localStorage`, so they stay on that device and browser and disappear if its site data is cleared.
@@ -45,7 +48,7 @@ Before pushing a change, raise `VERSION` and `RELEASED` at the top of `js/ui.js`
 | `js/scoring.js` | Scoring for hands, cribs and the play |
 | `js/game.js` | The rules, as a plain game object and the actions that change it |
 | `js/ai.js` | The computer opponent and hints |
-| `js/board.js` | Pegboard geometry: where each hole sits along the S-shaped track |
+| `js/board.js` | Pegboard geometry: where each hole sits along the S-shaped track, in two lanes or three |
 | `js/stats.js` | Lifetime statistics |
 | `js/sound.js` | Sound effects, generated with the Web Audio API (no audio files) |
 | `js/fanfare.js` | The win fanfare: an original tune for a generated brass ensemble with timpani, in a generated hall |

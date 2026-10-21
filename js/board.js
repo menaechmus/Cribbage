@@ -3,27 +3,31 @@
 //
 // The track is one S-shaped run of holes: left to right along the top, round
 // a bend, back along the middle, round a second bend, and along the bottom to
-// the finish. Each bend holds one group of five holes. The two players' lanes
-// run side by side all the way, so each lane takes the outside of one bend and
-// the inside of the other.
+// the finish. Each bend holds one group of five holes. The lanes (two, or
+// three for a three-player game) run side by side all the way, so the outer
+// ones take the outside of one bend and the inside of the other, and every
+// lane is the same length.
 
-export const BOARD = { width: 360, height: 88, track: 17 };
+// Two lanes 8 apart, or three 7 apart. A third lane needs wider bends (the
+// inside one still has room between its holes) and so a taller board.
+const SHAPES = {
+  2: { height: 88, track: 17, lane: 8, straights: [13, 44, 75], left: 28.5, right: 331.5 },
+  3: { height: 100, track: 25, lane: 7, straights: [14, 50, 86], left: 32.5, right: 327.5 },
+};
 
-const LANE = 8; // between the two lanes
-const STRAIGHTS = [13, 44, 75]; // centre line of each straight, top to bottom
-const TURN = (STRAIGHTS[1] - STRAIGHTS[0]) / 2; // radius of a bend's centre line
-const LEFT = 28.5; // the straights run between these two,
-const RIGHT = 331.5; // and the bends curve outwards from them
+export const boardFor = (lanes = 2) => ({ width: 360, height: SHAPES[lanes].height, track: SHAPES[lanes].track });
+export const BOARD = boardFor(2);
+
 const BEND_HOLES = 5;
 
 // How the holes of a game to `target` are spread along the straights.
-function layout(target) {
+function layout(target, shape) {
   const side = ((target - 1) / 5 - 3) / 3; // groups of five on the top and bottom straights
   const columns = 5 * (side + 1); // the middle straight is one group longer
   // Holes are one pitch apart, with an extra half pitch between groups and a
   // quarter pitch between each end of a straight and its bend.
-  const pitch = (RIGHT - LEFT) / (columns - 0.5 + side / 2);
-  const x = column => LEFT + (column + Math.floor(column / 5) / 2 + 0.25) * pitch;
+  const pitch = (shape.right - shape.left) / (columns - 0.5 + side / 2);
+  const x = column => shape.left + (column + Math.floor(column / 5) / 2 + 0.25) * pitch;
   return { side, columns, pitch, x };
 }
 
@@ -35,14 +39,16 @@ function bendXY(x, way, y, radius, n) {
   return [x + way * radius * Math.sin(angle), y - radius * Math.cos(angle)];
 }
 
-// Where hole number `hole` of a seat's lane is. Holes 0 and -1 are the two
-// starting holes; `target` (or anything beyond) is the single finish hole.
-export function holeXY(target, seat, hole) {
-  const { side, columns, pitch, x } = layout(target);
-  const [top, middle, bottom] = STRAIGHTS;
-  // Seat 0 runs above the centre line on the top and bottom straights and
-  // below it on the middle one; seat 1 is the mirror image.
-  const offset = seat === 0 ? -LANE / 2 : LANE / 2;
+// Where hole number `hole` of a lane is. Holes 0 and -1 are the two starting
+// holes; `target` (or anything beyond) is the single finish hole.
+export function holeXY(target, lane, hole, lanes = 2) {
+  const shape = SHAPES[lanes];
+  const { side, columns, pitch, x } = layout(target, shape);
+  const [top, middle, bottom] = shape.straights;
+  const turn = (middle - top) / 2; // radius of a bend's centre line
+  // Lane 0 runs uppermost on the top and bottom straights and lowest on the
+  // middle one; the last lane is its mirror image.
+  const offset = (lane - (lanes - 1) / 2) * shape.lane;
 
   if (hole >= target) return [x(5 * side - 1) + 1.5 * pitch, bottom];
   // The top straight is right-aligned, leaving a pocket for the starting holes.
@@ -51,24 +57,25 @@ export function holeXY(target, seat, hole) {
   let n = hole - 1; // steps along the track from hole 1
   if (n < 5 * side) return [x(5 + n), top + offset];
   n -= 5 * side;
-  if (n < BEND_HOLES) return bendXY(RIGHT, 1, (top + middle) / 2, TURN - offset, n);
+  if (n < BEND_HOLES) return bendXY(shape.right, 1, (top + middle) / 2, turn - offset, n);
   n -= BEND_HOLES;
   if (n < columns) return [x(columns - 1 - n), middle - offset];
   n -= columns;
-  if (n < BEND_HOLES) return bendXY(LEFT, -1, (middle + bottom) / 2, TURN + offset, n);
+  if (n < BEND_HOLES) return bendXY(shape.left, -1, (middle + bottom) / 2, turn + offset, n);
   n -= BEND_HOLES;
   return [x(n), bottom + offset];
 }
 
 // The centre line of the track as an SVG path, from the starting holes to the
-// finish. Stroked BOARD.track wide with round ends, it is the band the holes
-// sit in.
-export function trackPath(target) {
-  const [top, middle, bottom] = STRAIGHTS;
-  const start = holeXY(target, 0, -1)[0].toFixed(2);
-  const finish = holeXY(target, 0, target)[0].toFixed(2);
+// finish. Stroked as wide as boardFor() says, with round ends, it is the band
+// the holes sit in.
+export function trackPath(target, lanes = 2) {
+  const { straights: [top, middle, bottom], left, right } = SHAPES[lanes];
+  const turn = (middle - top) / 2;
+  const start = holeXY(target, 0, -1, lanes)[0].toFixed(2);
+  const finish = holeXY(target, 0, target, lanes)[0].toFixed(2);
   return (
-    `M${start} ${top} H${RIGHT} A${TURN} ${TURN} 0 0 1 ${RIGHT} ${middle} ` +
-    `H${LEFT} A${TURN} ${TURN} 0 0 0 ${LEFT} ${bottom} H${finish}`
+    `M${start} ${top} H${right} A${turn} ${turn} 0 0 1 ${right} ${middle} ` +
+    `H${left} A${turn} ${turn} 0 0 0 ${left} ${bottom} H${finish}`
   );
 }

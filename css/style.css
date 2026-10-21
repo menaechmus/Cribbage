@@ -8,17 +8,33 @@
   --tip: #9fe8ff;
   --seat0: #62b5ff;
   --seat1: #ff7f61;
-  /* One card width drives the whole table. It is the largest that lets six
-     overlapped cards fit across and the whole table fit down the screen: the
-     height left after the fixed parts (bars, board, buttons), shared between
-     the rows of cards. */
-  --size: clamp(40px, min(16.5vw, (100vh - 24.4vw - 248px) / 4.3), 100px);
+  --seat2: #ffd54a;
+  /* The board's height as a share of its width: taller with three lanes. */
+  --board-ratio: 0.244;
+  /* The rows of fixed height on the table (bars, buttons, status), which a
+     row of three other players makes a little taller. */
+  --fixed-rows: 248px;
+}
+
+/* One card width drives the whole table. It is the largest that lets six
+   overlapped cards fit across and the whole table fit down the screen: the
+   height left after the fixed parts (bars, board, buttons), shared between
+   the rows of cards. It is worked out again on the table, which may have a
+   taller board or an extra row. */
+:root,
+.table {
+  --size: clamp(40px, min(16.5vw, (100vh - 100vw * var(--board-ratio) - var(--fixed-rows)) / 4.3), 100px);
   --cw: var(--size);
 }
 
 @supports (height: 1dvh) {
-  :root { --size: clamp(40px, min(16.5vw, (100dvh - 24.4vw - 248px) / 4.3), 100px); }
+  :root,
+  .table { --size: clamp(40px, min(16.5vw, (100dvh - 100vw * var(--board-ratio) - var(--fixed-rows)) / 4.3), 100px); }
 }
+
+.table[data-lanes='3'] { --board-ratio: 0.2778; }
+.table[data-players='3'],
+.table[data-players='4'] { --fixed-rows: 264px; }
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -290,6 +306,28 @@ button {
   font-weight: 600;
 }
 
+/* A name for each person playing on this device. */
+.names {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.names input {
+  min-width: 0;
+  min-height: 42px;
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--ink);
+  font: inherit;
+}
+
+.names input::placeholder { color: var(--muted); }
+
+.partners { text-align: center; }
+
 .menu-actions {
   display: grid;
   gap: 10px;
@@ -310,6 +348,43 @@ button {
     min-height: 36px;
     padding-block: 6px;
   }
+
+  .names { gap: 6px; }
+
+  .names input {
+    min-height: 36px;
+    padding-block: 5px;
+  }
+}
+
+/* Choosing people adds rows for their names, so on all but tall screens the
+   title and the gaps shrink as they do on a short screen. */
+@media (max-height: 820px) {
+  .menu[data-mode='local'] { gap: 12px; }
+  .menu[data-mode='local'] .title h1 { font-size: 2rem; }
+  .menu[data-mode='local'] .options { gap: 6px; }
+
+  .menu[data-mode='local'] .fan {
+    margin-bottom: 8px;
+    --cw: 40px;
+  }
+
+  .menu[data-mode='local'] .choice button {
+    min-height: 36px;
+    padding-block: 6px;
+  }
+
+  .menu[data-mode='local'] .names { gap: 6px; }
+
+  .menu[data-mode='local'] .names input {
+    min-height: 36px;
+    padding-block: 5px;
+  }
+}
+
+/* A small phone with four names to show: the title cards make way. */
+@media (max-height: 600px) and (orientation: portrait) {
+  .menu[data-mode='local'] .fan { display: none; }
 }
 
 /* Table */
@@ -348,10 +423,14 @@ button {
   background: rgba(0, 0, 0, 0.28);
 }
 
-/* Too narrow for both names in full: shorten them with an ellipsis instead. */
+/* Too narrow for both names in full: shorten them with an ellipsis instead.
+   Three scores, or partnerships' pairs of names, always share the bar so. */
 @media (max-width: 359px) {
   .score { min-width: 0; }
 }
+
+.table[data-players='3'] .score,
+.table[data-players='4'] .score { min-width: 0; }
 
 .score.active { border-color: var(--gold); }
 
@@ -363,7 +442,11 @@ button {
   background: var(--seat0);
 }
 
-.score[data-seat='1'] i { background: var(--seat1); }
+.score[data-side='1'] i { background: var(--seat1); }
+.score[data-side='2'] i { background: var(--seat2); }
+
+/* The score boxes sit in the bar as if they were its own children. */
+.scores { display: contents; }
 
 .score .name {
   flex: 1;
@@ -406,14 +489,45 @@ button {
   transition: transform 0.45s ease;
 }
 
-.peg.seat0 { fill: var(--seat0); }
-.peg.seat1 { fill: var(--seat1); }
+.peg.side0 { fill: var(--seat0); }
+.peg.side1 { fill: var(--seat1); }
+.peg.side2 { fill: var(--seat2); }
 
 .seat {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 10px;
+}
+
+/* The other players: one beside its cards, or with more players each name
+   over its cards, overlapped so that three fit across a phone. */
+.seat.top {
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+
+.other {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.table[data-players='3'] .other,
+.table[data-players='4'] .other {
+  flex-direction: column;
+  gap: 2px;
+}
+
+.table[data-players='3'] .other .card + .card,
+.table[data-players='4'] .other .card + .card { margin-left: calc(var(--cw) * -0.45); }
+
+.other .seat-label {
+  max-width: 34vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .seat.bottom {
@@ -496,6 +610,23 @@ button {
 .pile .card + .card { margin-left: calc(var(--cw) * -0.55); }
 .pile .mine { transform: translateY(18%); }
 .pile .theirs { transform: translateY(-18%); }
+
+/* With three or four players, a dot in the player's colour on each card. */
+.pile .marked::after {
+  position: absolute;
+  left: 8%;
+  bottom: 5%;
+  width: 16%;
+  height: calc(var(--cw) * 0.16);
+  border-radius: 50%;
+  background: var(--dot);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+  content: '';
+}
+
+.pile .side0 { --dot: var(--seat0); }
+.pile .side1 { --dot: var(--seat1); }
+.pile .side2 { --dot: var(--seat2); }
 .pile .old { filter: brightness(0.6); }
 .pile .fresh { animation: drop 0.25s ease-out; }
 
@@ -673,10 +804,13 @@ button {
 /* Wide screens: starter and crib side by side, and the count beside the pile.
    The board is narrower here, so the height sum behind --size differs. */
 @media (min-aspect-ratio: 1/1) {
-  :root { --size: clamp(40px, min(16.5vw, (84vh - 225px) / 4.7), 100px); }
+  /* The board here is 64vh wide at most, so a two-lane board takes 16vh. */
+  :root,
+  .table { --size: clamp(40px, min(16.5vw, (100vh - 64vh * max(var(--board-ratio), 0.25) - var(--fixed-rows) + 23px) / 4.7), 100px); }
 
   @supports (height: 1dvh) {
-    :root { --size: clamp(40px, min(16.5vw, (84dvh - 225px) / 4.7), 100px); }
+    :root,
+    .table { --size: clamp(40px, min(16.5vw, (100dvh - 64vh * max(var(--board-ratio), 0.25) - var(--fixed-rows) + 23px) / 4.7), 100px); }
   }
 
   .side { flex-direction: row; }
@@ -698,10 +832,12 @@ button {
 /* A phone on its side: scores, board and buttons on the left, cards on the right. */
 @media (orientation: landscape) and (max-height: 520px) {
   /* Here the cards share the height with only the score rows above them. */
-  :root { --size: clamp(38px, min(8vw, (100vh - 164px) / 3.46), 84px); }
+  :root,
+  .table { --size: clamp(38px, min(8vw, (100vh - var(--fixed-rows) + 84px) / 3.46), 84px); }
 
   @supports (height: 1dvh) {
-    :root { --size: clamp(38px, min(8vw, (100dvh - 164px) / 3.46), 84px); }
+    :root,
+    .table { --size: clamp(38px, min(8vw, (100dvh - var(--fixed-rows) + 84px) / 3.46), 84px); }
   }
 
   .table {
@@ -720,6 +856,10 @@ button {
   }
 
   .topbar .icon-btn { grid-row: span 2; }
+
+  /* Three scores stacked would make the first row too tall: side by side. */
+  .table[data-players='3'] .topbar { grid-template-columns: auto repeat(3, minmax(0, 1fr)); }
+  .table[data-players='3'] .topbar .icon-btn { grid-row: auto; }
 
   .score {
     min-height: 34px;

@@ -3,22 +3,22 @@
 
 import { RANKS, SUITS, rank, suit, isRed, cardName } from './cards.js';
 import { summarize } from './scoring.js';
-import { newGame, discard, playCard, go, advanceShow, legalCards, skunk } from './game.js';
+import { newGame, upgradeGame, discard, playCard, go, advanceShow, legalCards, skunk, skunkOf, sideOf, sideCount, seatsOf, tossCount } from './game.js';
 import { pickDiscard, pickPlay, hint } from './ai.js';
 import { emptyStats, loadStats, recordGame } from './stats.js';
 import { playSound, setMuted, unlockSound } from './sound.js';
-import { BOARD, holeXY, trackPath } from './board.js';
+import { boardFor, holeXY, trackPath } from './board.js';
 import { startParty } from './celebrate.js';
 
 // Shown in the About box. Bump both with every release: a browser still
 // running a cached copy of this file then shows the old number.
-const VERSION = '1.5.0';
-const RELEASED = '15 October 2026';
+const VERSION = '1.6.0';
+const RELEASED = '20 October 2026';
 
-const AI = 1; // the computer always sits in seat 1
 const AI_DELAY = 900;
 const SHUFFLE_MS = 560; // two riffles of the deck, as timed in the stylesheet
-const DEAL_GAP_MS = 60; // between one card leaving the deck and the next
+const DEAL_MS = 660; // from the first card leaving the deck to the last, whatever the table
+const DEAL_GAP_MS = 60; // ...but no more than this between one card and the next
 const FLIGHT_MS = 240; // a card's trip from the deck to a hand
 const COUNT_STEP_MS = 1050; // each scoring combination stays up this long...
 const COUNT_MAX_MS = 6750; // ...unless a big hand would make the whole count drag
@@ -27,6 +27,7 @@ const SKUNK_AT_MS = 600; // after a skunk win a skunk sets off across the screen
 const SKUNK_PACE = 260; // walking this many pixels a second,
 const SKUNK_MIN_MS = 3000; // but taking no less than this
 const SKUNK_MAX_MS = 4500; // and no more than this
+const NAME_LENGTH = 12;
 const SETTINGS_KEY = 'cribbage.settings';
 const GAME_KEY = 'cribbage.game';
 const STATS_KEY = 'cribbage.stats';
@@ -56,17 +57,25 @@ function parseValue(text) {
   return /^\d+$/.test(text) ? Number(text) : text;
 }
 
-// Saved settings are only accepted if the menu offers that value.
+// Saved settings are only accepted if the menu offers that value. Before
+// 1.6.0 two people on one device was its own mode.
 function loadSettings() {
-  const settings = { mode: 'ai', difficulty: 'medium', target: 121, hints: true, sound: true };
+  const settings = { mode: 'ai', difficulty: 'medium', players: 2, names: ['', '', '', ''], target: 121, hints: true, sound: true };
   const saved = load(SETTINGS_KEY);
-  for (const group of document.querySelectorAll('.choice')) {
+  if (saved?.mode === '2p') saved.mode = 'local';
+  for (const group of document.querySelectorAll('.choice[data-setting]')) {
     const key = group.dataset.setting;
     const offered = [...group.children].map(button => parseValue(button.dataset.value));
     if (offered.includes(saved?.[key])) settings[key] = saved[key];
   }
+  if (Array.isArray(saved?.names)) {
+    settings.names = settings.names.map((name, i) => (typeof saved.names[i] === 'string' ? saved.names[i].slice(0, NAME_LENGTH) : name));
+  }
   return settings;
 }
+
+// Names are typed in, so they are escaped before going into the page.
+const escapeHtml = text => String(text).replace(/[&<>"']/g, ch => `&#${ch.charCodeAt(0)};`);
 
 const settings = loadSettings();
 const stats = loadStats(load(STATS_KEY));
@@ -74,7 +83,7 @@ let game = null;
 let selected = []; // cards picked in the hand
 let tip = null; // { cards, text } from the last hint
 let messages = []; // what the last action did, in words
-let revealedTo = null; // two-player mode: the seat whose hand is face-up
+let revealedTo = null; // people sharing a device: the seat whose hand is face-up
 let pileShown = 0; // pile cards already drawn, so only new ones animate
 let starterShown = false; // likewise for the starter, which turns over once
 let dealing = false; // the shuffle-and-deal animation is running
@@ -91,24 +100,41 @@ setMuted(!settings.sound);
 
 // ---- Who is who ---------------------------------------------------------
 
-const isAi = seat => game.mode === 'ai' && seat === AI;
-const name = seat => (game.mode === 'ai' ? ['You', 'Computer'][seat] : `Player ${seat + 1}`);
-const owner = seat => (name(seat) === 'You' ? 'Your' : `${name(seat)}'s`);
-const does = (seat, verb) => `${name(seat)} ${verb}${name(seat) === 'You' ? '' : 's'}`;
+const seats = () => game.players.map((_, seat) => seat);
+const nameOf = seat => game.players[seat].name;
+const isAi = seat => game.players[seat].ai;
+const isYou = seat => nameOf(seat) === 'You';
+const owner = seat => (isYou(seat) ? 'Your' : `${nameOf(seat)}'s`);
+const does = (seat, verb) => `${nameOf(seat)} ${verb}${isYou(seat) ? '' : 's'}`;
 const capital = text => text[0].toUpperCase() + text.slice(1);
+const side = seat => sideOf(game, seat);
+// A side's name: a player's own, or a partnership's, "Ann & Cy".
+const sideName = s => seatsOf(game, s).map(nameOf).join(' & ');
+// Whether a person (not the computer) is on the winning side.
+const personWon = () => seatsOf(game, game.winner).some(seat => !isAi(seat));
 
-// The seat that must act now, or null while hands are being counted.
+// The seat that must act now, or null while hands are being counted. In the
+// discard, people take turns round the table from the dealer's left; the
+// computer throws its cards along with the person's.
 function actor() {
-  if (game.phase === 'discard') return game.discards[0].length ? 1 : 0;
+  if (game.phase === 'discard') {
+    const count = game.players.length;
+    for (let steps = 1; steps <= count; steps++) {
+      const seat = (game.dealer + steps) % count;
+      if (!game.discards[seat].length && !isAi(seat)) return seat;
+    }
+    return null;
+  }
   if (game.phase === 'play') return game.turn;
   return null;
 }
 
-// The seat shown at the bottom of the screen.
+// The seat shown at the bottom of the screen: against the computer always
+// the person; between people whoever must act.
 const viewer = () => (game.mode === 'ai' ? 0 : actor() ?? revealedTo ?? 0);
 
-// Two players share one screen, so a hand stays hidden until its owner asks.
-const covered = () => game.mode === '2p' && actor() !== null && actor() !== revealedTo;
+// People share one screen, so a hand stays hidden until its owner asks.
+const covered = () => game.mode === 'local' && actor() !== null && actor() !== revealedTo;
 const canAct = () => actor() !== null && !isAi(actor()) && !covered() && !dealing;
 
 // ---- Drawing ------------------------------------------------------------
@@ -130,38 +156,59 @@ function cardHtml(card, classes = '', asButton = false) {
   );
 }
 
-function pegTransform(seat, hole) {
-  const [x, y] = holeXY(game.target, seat, hole);
+// One lane on the board for each side: two, or three for three players.
+const lanes = () => sideCount(game);
+
+function pegTransform(s, hole) {
+  const [x, y] = holeXY(game.target, s, hole, lanes());
   return `translate(${x.toFixed(2)}px, ${y.toFixed(2)}px)`;
 }
 
 // `from` is the game, or the scores and pegs held from before a count.
-const pegHoles = (seat, from = game) => [['back', from.back[seat]], ['front', from.scores[seat]]];
+const pegHoles = (s, from = game) => [['back', from.back[s]], ['front', from.scores[s]]];
 
 function drawBoard() {
+  const shape = boardFor(lanes());
   let holes = '';
   let pegs = '';
-  for (const seat of [0, 1]) {
+  for (let s = 0; s < lanes(); s++) {
     for (let hole = -1; hole < game.target; hole++) {
-      const [x, y] = holeXY(game.target, seat, hole);
+      const [x, y] = holeXY(game.target, s, hole, lanes());
       holes += `<circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="2"/>`;
     }
-    for (const [which, hole] of pegHoles(seat)) {
-      pegs += `<circle class="peg seat${seat} ${which}" r="3.3" style="transform: ${pegTransform(seat, hole)}"/>`;
+    for (const [which, hole] of pegHoles(s)) {
+      pegs += `<circle class="peg side${s} ${which}" r="3.3" style="transform: ${pegTransform(s, hole)}"/>`;
     }
   }
-  const [finishX, finishY] = holeXY(game.target, 0, game.target);
+  const [finishX, finishY] = holeXY(game.target, 0, game.target, lanes());
   $('board').innerHTML =
-    `<svg viewBox="0 0 ${BOARD.width} ${BOARD.height}" role="img" aria-label="Cribbage board">` +
-    `<path class="track" d="${trackPath(game.target)}" stroke-width="${BOARD.track}"/>` +
+    `<svg viewBox="0 0 ${shape.width} ${shape.height}" role="img" aria-label="Cribbage board">` +
+    `<path class="track" d="${trackPath(game.target, lanes())}" stroke-width="${shape.track}"/>` +
     `<g class="holes">${holes}<circle cx="${finishX.toFixed(2)}" cy="${finishY}" r="2.8"/></g>${pegs}</svg>`;
+  $('scores').innerHTML = game.scores
+    .map((_, s) => `<div class="score" data-side="${s}"><i></i><span class="name"></span><b class="points"></b></div>`)
+    .join('');
+}
+
+// The other players, in turn order from the one at the bottom: each with
+// their name and their cards face-down.
+function othersHtml(me) {
+  const count = game.players.length;
+  return Array.from({ length: count - 1 }, (_, i) => (me + 1 + i) % count)
+    .map(seat => {
+      const notes = [game.dealer === seat && 'dealer', count === 4 && side(seat) === side(me) && 'partner'].filter(Boolean);
+      const label = [nameOf(seat), ...notes].join(' · ');
+      return `<div class="other" data-seat="${seat}"><div class="seat-label">${escapeHtml(label)}</div><div class="hand hand-small">${BACK.repeat(game.hands[seat].length)}</div></div>`;
+    })
+    .join('');
 }
 
 function playHtml(me) {
   const old = game.pile.length - game.stack.length; // cards from counts already finished
+  const marked = game.players.length > 2; // with more players, a dot says whose card it is
   const pile = game.pile
     .map(({ card, player }, i) => {
-      const classes = [player === me ? 'mine' : 'theirs', i < old && 'old', i >= pileShown && 'fresh'];
+      const classes = [side(player) === side(me) ? 'mine' : 'theirs', marked && `marked side${side(player)}`, i < old && 'old', i >= pileShown && 'fresh'];
       return cardHtml(card, classes.filter(Boolean).join(' '));
     })
     .join('');
@@ -170,7 +217,7 @@ function playHtml(me) {
   return `
     <div class="side">
       <figure>${cut ? cardHtml(game.starter, starterShown ? '' : 'turn') : deck}<figcaption>${cut ? 'Starter' : 'Deck'}</figcaption></figure>
-      <figure>${game.crib.length ? BACK : '<span class="card empty"></span>'}<figcaption>${owner(game.dealer)} crib</figcaption></figure>
+      <figure class="crib">${game.crib.length ? BACK : '<span class="card empty"></span>'}<figcaption>${escapeHtml(owner(game.dealer))} crib</figcaption></figure>
     </div>
     <div class="pile">${pile}</div>
     <div class="count${game.phase === 'play' ? '' : ' idle'}"><small>Count</small><b>${game.count}</b></div>`;
@@ -199,7 +246,7 @@ function tallyHtml() {
   const total = reached.reduce((sum, line) => sum + line.points, 0);
   return `
     <div class="tally">
-      <h2>${owner(player)} ${kind}</h2>
+      <h2>${escapeHtml(owner(player))} ${kind}</h2>
       <div class="tally-cards">${cards.map(card => cardHtml(card, light(card))).join('')}<span class="plus">+</span>${cardHtml(game.starter, light(game.starter))}</div>
       <ul>${lines || '<li><span>Nothing scores</span><b>–</b></li>'}<li class="total"><span>Total</span><b>${total}</b></li></ul>
     </div>`;
@@ -209,10 +256,11 @@ function promptText(me, acting) {
   if (dealing) return 'Shuffling and dealing…';
   if (counting) return 'Counting. Tap to skip.';
   if (game.phase === 'discard' && acting) {
-    return `Choose two cards for ${game.dealer === me ? 'your own' : `${name(game.dealer)}'s`} crib.`;
+    const cards = tossCount(game) === 2 ? 'two cards' : 'a card';
+    return `Choose ${cards} for ${game.dealer === me ? 'your own' : `${nameOf(game.dealer)}'s`} crib.`;
   }
   if (game.phase === 'play') {
-    if (isAi(game.turn)) return 'Computer is thinking…';
+    if (isAi(game.turn)) return `${nameOf(game.turn)} is thinking…`;
     if (acting && !legalCards(game, me).length) return 'None of your cards fits under 31. Press Go.';
     if (acting) return selected.length ? 'Tap it again, or press Play.' : 'Your turn. Choose a card to play.';
   }
@@ -220,9 +268,18 @@ function promptText(me, acting) {
   return '';
 }
 
+// The show steps through every hand, then the crib.
+function showLabel() {
+  const step = game.showStep; // the step on show, -1 before the first
+  const hands = game.players.length;
+  if (step < 0) return 'Count hands';
+  if (step < hands - 1) return 'Next hand';
+  return step === hands - 1 ? 'Count crib' : 'Next deal';
+}
+
 function mainButton(acting) {
-  if (game.phase === 'show') return [['Count hands', 'Next hand', 'Count crib', 'Next deal'][game.showStep + 1], !counting];
-  if (game.phase === 'discard') return ['Send to crib', acting && selected.length === 2];
+  if (game.phase === 'show') return [showLabel(), !counting];
+  if (game.phase === 'discard') return ['Send to crib', acting && selected.length === tossCount(game)];
   if (game.phase === 'play') {
     if (acting && !legalCards(game, actor()).length) return ['Go', true];
     return [selected.length ? `Play ${cardName(selected[0])}` : 'Play', acting && selected.length === 1];
@@ -230,19 +287,35 @@ function mainButton(acting) {
   return ['Game over', false];
 }
 
+// Who was skunked, in words. With two sides only the margin matters.
+function skunkText() {
+  if (sideCount(game) === 2) return ['', 'Skunk!', 'Double skunk!'][skunk(game)];
+  return game.scores
+    .map((_, s) => [s, skunkOf(game, s)])
+    .filter(([, level]) => level)
+    .map(([s, level]) => `${level === 2 ? 'Double skunk' : 'Skunk'} for ${sideName(s)}!`)
+    .join(' ');
+}
+
 function gameOverHtml() {
-  const title = name(game.winner) === 'You' ? 'You win!' : `${name(game.winner)} wins`;
-  const skunked = ['', 'Skunk!', 'Double skunk!'][skunk(game)];
-  const rows = [0, 1]
-    .map(seat => {
-      const tally = game.tally[seat];
-      return `<tr><th>${name(seat)}</th><td>${game.scores[seat]}</td><td>${tally.pegging}</td><td>${tally.hand.points}</td><td>${tally.crib.points}</td></tr>`;
+  const winners = seatsOf(game, game.winner);
+  const title = game.mode === 'ai' ? (game.winner === 0 ? 'You win!' : 'Computer wins') : `${sideName(game.winner)} win${winners.length > 1 ? '' : 's'}`;
+  const skunked = skunkText();
+  // A row for each player, or for each partnership.
+  const rows = game.scores
+    .map((score, s) => {
+      const members = seatsOf(game, s).map(seat => game.tally[seat]);
+      const sum = pick => members.reduce((total, tally) => total + pick(tally), 0);
+      return (
+        `<tr><th>${escapeHtml(sideName(s))}</th><td>${score}</td><td>${sum(t => t.pegging)}</td>` +
+        `<td>${sum(t => t.hand.points)}</td><td>${sum(t => t.crib.points)}</td></tr>`
+      );
     })
     .join('');
   const row = game.mode === 'ai' ? stats.ai[game.difficulty] : null;
   return `
-    <h2>${title}</h2>
-    ${skunked ? `<p class="skunk">${skunked}</p>` : ''}
+    <h2>${escapeHtml(title)}</h2>
+    ${skunked ? `<p class="skunk">${escapeHtml(skunked)}</p>` : ''}
     <table class="grid">
       <thead><tr><th></th><th>Score</th><th>Pegging</th><th>Hands</th><th>Cribs</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -264,7 +337,12 @@ function statsHtml() {
       `<tr><th>${capital(level)}</th><td>${row.games}</td><td>${row.wins}</td>` +
       `<td>${percent(row.wins, row.games)}</td><td>${row.streak}</td><td>${row.bestStreak}</td></tr>`)
     .join('');
-  const { totals, records, twoPlayer } = stats;
+  const people = Object.values(stats.people)
+    .filter(person => person.games)
+    .sort((a, b) => b.games - a.games || a.name.localeCompare(b.name))
+    .map(person => `<tr><th>${escapeHtml(person.name)}</th><td>${person.games}</td><td>${person.wins}</td><td>${percent(person.wins, person.games)}</td></tr>`)
+    .join('');
+  const { totals, records } = stats;
   return `
     <h3>Against the computer</h3>
     <table class="grid">
@@ -280,34 +358,39 @@ function statsHtml() {
       <dt>Average crib</dt><dd>${average(totals.crib.points, totals.crib.count)}</dd>
       <dt>Pegging per deal</dt><dd>${average(totals.pegging, totals.deals)}</dd>
     </dl>
-    <h3>Two players</h3>
-    <p>${twoPlayer.games ? `Player 1 has won ${twoPlayer.wins[0]}, Player 2 has won ${twoPlayer.wins[1]}.` : 'No games finished yet.'}</p>
+    <h3>Between people</h3>
+    ${
+      people
+        ? `<table class="grid"><thead><tr><th></th><th>Played</th><th>Won</th><th>Win&nbsp;%</th></tr></thead><tbody>${people}</tbody></table>`
+        : '<p>No games finished yet.</p>'
+    }
     <p class="muted">Finished games are saved in this browser, on this device.</p>`;
 }
 
 function render() {
   const me = viewer();
-  const them = 1 - me;
   const hidden = covered();
   const acting = canAct();
-  $('table').dataset.phase = game.phase;
+  const table = $('table');
+  table.dataset.phase = game.phase;
+  table.dataset.players = game.players.length;
+  table.dataset.lanes = lanes();
 
   // While a hand is counted out, the board waits at the scores from before it.
   const board = counting ? counting.held : game;
-  for (const seat of [0, 1]) {
-    const score = document.querySelector(`.score[data-seat="${seat}"]`);
-    score.querySelector('.name').textContent = name(seat);
-    score.querySelector('.points').textContent = board.scores[seat];
-    score.classList.toggle('active', actor() === seat);
-    for (const [which, hole] of pegHoles(seat, board)) {
-      $('board').querySelector(`.peg.seat${seat}.${which}`).style.transform = pegTransform(seat, hole);
+  const now = actor();
+  game.scores.forEach((_, s) => {
+    const score = document.querySelector(`.score[data-side="${s}"]`);
+    score.querySelector('.name').textContent = sideName(s);
+    score.querySelector('.points').textContent = board.scores[s];
+    score.classList.toggle('active', now !== null && side(now) === s);
+    for (const [which, hole] of pegHoles(s, board)) {
+      $('board').querySelector(`.peg.side${s}.${which}`).style.transform = pegTransform(s, hole);
     }
-  }
+  });
 
-  const label = seat => `${name(seat)}${game.dealer === seat ? ' · dealer' : ''}`;
-  $('top-label').textContent = label(them);
-  $('bottom-label').textContent = label(me);
-  $('top-hand').innerHTML = BACK.repeat(game.hands[them].length);
+  $('others').innerHTML = othersHtml(me);
+  $('bottom-label').textContent = `${nameOf(me)}${game.dealer === me ? ' · dealer' : ''}`;
 
   const legal = game.phase === 'play' && acting ? legalCards(game, me) : null;
   const turning = turnUp && !hidden && !dealing;
@@ -339,9 +422,9 @@ function render() {
   // The cover waits for the deal to finish: the cards arrive face-down anyway.
   $('cover').hidden = !hidden || dealing;
   if (hidden) {
-    $('cover-title').textContent = `Pass the device to ${name(actor())}`;
+    $('cover-title').textContent = `Pass the device to ${nameOf(now)}`;
     $('cover-text').textContent = messages.join(' ');
-    $('btn-reveal').textContent = `Show ${name(actor())}'s cards`;
+    $('btn-reveal').textContent = `Show ${nameOf(now)}'s cards`;
   }
 
   // A game won on a count is announced once the count has been shown, and a
@@ -376,12 +459,13 @@ function soundEvents(events) {
     else if (event.type === 'cut') playSound('flip', (delay += 0.15));
     else if (event.type === 'score') playSound('peg', (delay += 0.18));
   }
-  if (game.phase === 'over') playSound(isAi(game.winner) ? 'lose' : 'win', delay + 0.35);
+  if (game.phase === 'over') playSound(personWon() ? 'win' : 'lose', delay + 0.35);
 }
 
-// Shows a fresh deal: the deck riffles, then twelve cards fly to the two hands
-// in dealing order. The cards are already in their final places in the page;
-// each is only drawn as if it started at the deck.
+// Shows a fresh deal: the deck riffles, then the cards fly out one at a time
+// round the table from the dealer's left, and with three players one more to
+// the crib. The cards are already in their final places in the page; each is
+// only drawn as if it started at the deck.
 function dealCards() {
   playSound('shuffle');
   if (reducedMotion()) {
@@ -391,15 +475,23 @@ function dealCards() {
 
   dealing = true;
   render();
+  const me = viewer();
+  const count = game.players.length;
+  const handOf = seat => (seat === me ? $('bottom-hand') : $('others').querySelector(`[data-seat="${seat}"] .hand`));
+  const flights = [];
+  for (let i = 0; i < count * game.hands[0].length; i++) {
+    const seat = (game.dealer + 1 + (i % count)) % count;
+    flights.push(handOf(seat).children[Math.floor(i / count)]);
+  }
+  if (game.crib.length) flights.push($('center').querySelector('.crib .card'));
+
   const deck = $('center').querySelector('.deck').getBoundingClientRect();
-  const hands = [$('bottom-hand'), $('top-hand')];
-  const first = viewer() === game.dealer ? 1 : 0; // the non-dealer is dealt to first
-  for (let i = 0; i < 12; i++) {
-    const card = hands[(first + i) % 2].children[Math.floor(i / 2)];
+  const gap = Math.min(DEAL_GAP_MS, DEAL_MS / (flights.length - 1));
+  flights.forEach((card, i) => {
     const box = card.getBoundingClientRect();
     const dx = deck.left + deck.width / 2 - box.left - box.width / 2;
     const dy = deck.top + deck.height / 2 - box.top - box.height / 2;
-    const delay = SHUFFLE_MS + i * DEAL_GAP_MS;
+    const delay = SHUFFLE_MS + i * gap;
     // Invisible while it waits its turn, then out from the deck to its place.
     card.animate(
       [
@@ -410,8 +502,8 @@ function dealCards() {
       { duration: FLIGHT_MS, delay, easing: 'ease-out', fill: 'backwards' },
     );
     playSound('deal', delay / 1000);
-  }
-  dealTimer = setTimeout(endDeal, SHUFFLE_MS + 11 * DEAL_GAP_MS + FLIGHT_MS);
+  });
+  dealTimer = setTimeout(endDeal, SHUFFLE_MS + (flights.length - 1) * gap + FLIGHT_MS);
 }
 
 // Also called early, when a tap or key skips the animation.
@@ -457,7 +549,7 @@ function endCount() {
 // and confetti, and on a skunk a skunk walking by. A win for the computer goes
 // straight to the box. Called just before the redraw that shows the end.
 function celebrate() {
-  if (game.phase !== 'over' || isAi(game.winner) || reducedMotion()) return;
+  if (game.phase !== 'over' || !personWon() || reducedMotion()) return;
   party = startParty($('party'), () => playSound('firework'));
   let wait = CHEER_MS;
   if (skunk(game)) wait = Math.max(wait, SKUNK_AT_MS + walkSkunk() + 200);
@@ -493,17 +585,22 @@ function stopParty() {
   $('skunk-walk').hidden = true;
 }
 
-// Runs one game action, then saves and redraws.
+// Runs one game action, then saves and shows what it did.
 function commit(action) {
-  const held = { scores: [...game.scores], back: [...game.back] };
-  const stepBefore = game.showStep;
+  const before = { scores: [...game.scores], back: [...game.back], step: game.showStep, deals: game.deals };
   action();
+  settle(before);
+}
+
+// Shows the game as it now is, after `before`: the deal, the count or the
+// end of the game, with their sounds, and saves it.
+function settle(before) {
   selected = [];
   tip = null;
   messages = describe(game.events);
-  const dealt = game.phase === 'discard' && !game.crib.length;
-  const counted = Boolean(game.show) && game.showStep !== stepBefore; // a hand or crib was just scored
-  if (dealt) revealedTo = null; // new deal: hide both hands again
+  const dealt = game.deals !== before.deals;
+  const counted = Boolean(game.show) && game.showStep !== before.step; // a hand or crib was just scored
+  if (dealt) revealedTo = null; // new deal: hide every hand again
   if (game.phase === 'over') {
     recordGame(stats, game);
     store(STATS_KEY, stats);
@@ -513,7 +610,7 @@ function commit(action) {
   }
 
   if (counted && game.show.items.length && !reducedMotion()) {
-    countOut(held);
+    countOut(before);
   } else {
     soundEvents(game.events);
     celebrate();
@@ -528,9 +625,10 @@ function scheduleAi() {
   clearTimeout(aiTimer);
   if (game.phase !== 'play' || !isAi(game.turn)) return;
   aiTimer = setTimeout(() => {
+    const seat = game.turn;
     commit(() => {
-      if (legalCards(game, AI).length) playCard(game, AI, pickPlay(game, AI));
-      else go(game, AI);
+      if (legalCards(game, seat).length) playCard(game, seat, pickPlay(game, seat));
+      else go(game, seat);
     });
   }, AI_DELAY);
 }
@@ -538,7 +636,7 @@ function scheduleAi() {
 function onCard(card) {
   if (!canAct()) return;
   if (game.phase === 'discard') {
-    selected = selected.includes(card) ? selected.filter(c => c !== card) : [...selected, card].slice(-2);
+    selected = selected.includes(card) ? selected.filter(c => c !== card) : [...selected, card].slice(-tossCount(game));
   } else if (legalCards(game, actor()).includes(card)) {
     if (selected[0] === card) {
       onMain();
@@ -557,12 +655,14 @@ function onMain() {
   }
   if (!canAct()) return;
   const seat = actor();
-  if (game.phase === 'discard' && selected.length === 2) {
-    playSound('slide');
-    playSound('slide', 0.09);
+  if (game.phase === 'discard' && selected.length === tossCount(game)) {
+    selected.forEach((_, i) => playSound('slide', i * 0.09));
     commit(() => {
       discard(game, seat, selected);
-      if (isAi(1 - seat)) discard(game, AI, pickDiscard(game, AI));
+      // The computer throws its cards along with the person's.
+      for (const other of seats()) {
+        if (isAi(other) && game.phase === 'discard' && !game.discards[other].length) discard(game, other, pickDiscard(game, other));
+      }
     });
   } else if (game.phase === 'play' && !legalCards(game, seat).length) {
     commit(() => go(game, seat));
@@ -594,6 +694,22 @@ function toggleSound() {
 
 // ---- Screens ------------------------------------------------------------
 
+// The players for a new game from the menu. Two people typing the same name
+// become "Ann" and "Ann 2", so that every message names one person.
+function playersFor() {
+  if (settings.mode === 'ai') return [{ name: 'You' }, { name: 'Computer', ai: true, level: settings.difficulty }];
+  const players = [];
+  settings.names.slice(0, settings.players).forEach((typed, i) => {
+    const wanted = typed.replace(/\s+/g, ' ').trim() || `Player ${i + 1}`;
+    let name = wanted;
+    for (let n = 2; players.some(other => other.name.toLowerCase() === name.toLowerCase()); n++) {
+      name = `${wanted.slice(0, NAME_LENGTH - String(n).length - 1)} ${n}`;
+    }
+    players.push({ name });
+  });
+  return players;
+}
+
 function showMenu() {
   clearTimeout(aiTimer);
   clearTimeout(dealTimer);
@@ -601,17 +717,27 @@ function showMenu() {
   dealing = false;
   counting = null;
   stopParty();
-  for (const group of document.querySelectorAll('.choice')) {
+  for (const group of document.querySelectorAll('.choice[data-setting]')) {
     for (const button of group.children) {
       button.setAttribute('aria-pressed', parseValue(button.dataset.value) === settings[group.dataset.setting]);
     }
   }
+  const people = settings.mode === 'local';
+  $('menu').dataset.mode = settings.mode;
   $('row-difficulty').hidden = settings.mode !== 'ai';
+  $('row-players').hidden = !people;
+  $('row-names').hidden = !people;
+  $('row-partners').hidden = !people || settings.players !== 4;
+  for (const field of document.querySelectorAll('[data-name]')) {
+    const i = Number(field.dataset.name);
+    field.hidden = i >= settings.players;
+    field.value = settings.names[i];
+  }
 
-  const saved = load(GAME_KEY);
-  const canResume = saved?.v === 1 && saved.phase !== 'over';
+  const saved = upgradeGame(load(GAME_KEY));
+  const canResume = saved?.v === 2 && saved.phase !== 'over';
   $('btn-resume').hidden = !canResume;
-  if (canResume) $('btn-resume').textContent = `Resume game (${saved.scores[0]}–${saved.scores[1]})`;
+  if (canResume) $('btn-resume').textContent = `Resume game (${saved.scores.join('–')})`;
   $('btn-new').classList.toggle('primary', !canResume);
 
   for (const id of ['table', 'cover', 'gameover']) $(id).hidden = true;
@@ -620,7 +746,7 @@ function showMenu() {
 
 function start(saved = null) {
   stopParty();
-  game = saved ?? newGame(settings);
+  game = upgradeGame(saved) ?? newGame({ mode: settings.mode, difficulty: settings.difficulty, target: settings.target, players: playersFor() });
   selected = [];
   tip = null;
   messages = [];
@@ -653,6 +779,13 @@ $('menu').addEventListener('click', event => {
   setMuted(!settings.sound);
   showMenu();
 });
+
+for (const field of document.querySelectorAll('[data-name]')) {
+  field.addEventListener('input', () => {
+    settings.names[Number(field.dataset.name)] = field.value.slice(0, NAME_LENGTH);
+    store(SETTINGS_KEY, settings);
+  });
+}
 
 $('btn-new').addEventListener('click', () => start());
 $('btn-resume').addEventListener('click', () => start(load(GAME_KEY)));

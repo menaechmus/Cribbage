@@ -24,10 +24,10 @@
 
   <div class="options">
     <div class="option">
-      <span>Opponent</span>
+      <span>Play against</span>
       <div class="choice" data-setting="mode">
         <button data-value="ai">Computer</button>
-        <button data-value="2p">Two players</button>
+        <button data-value="local">People</button>
       </div>
     </div>
     <div class="option" id="row-difficulty">
@@ -38,6 +38,21 @@
         <button data-value="hard">Hard</button>
       </div>
     </div>
+    <div class="option" id="row-players">
+      <span>Players</span>
+      <div class="choice" data-setting="players">
+        <button data-value="2">2</button>
+        <button data-value="3">3</button>
+        <button data-value="4">4</button>
+      </div>
+    </div>
+    <div class="names" id="row-names">
+      <input data-name="0" maxlength="12" placeholder="Player 1" aria-label="Player 1 name" autocomplete="off" spellcheck="false">
+      <input data-name="1" maxlength="12" placeholder="Player 2" aria-label="Player 2 name" autocomplete="off" spellcheck="false">
+      <input data-name="2" maxlength="12" placeholder="Player 3" aria-label="Player 3 name" autocomplete="off" spellcheck="false">
+      <input data-name="3" maxlength="12" placeholder="Player 4" aria-label="Player 4 name" autocomplete="off" spellcheck="false">
+    </div>
+    <p class="muted partners" id="row-partners">Partners: players 1 and 3 against 2 and 4.</p>
     <div class="option">
       <span>Play to</span>
       <div class="choice" data-setting="target">
@@ -81,16 +96,12 @@
 <main id="table" class="screen table" hidden>
   <header class="topbar">
     <button id="btn-menu" class="icon-btn" aria-label="Menu">☰</button>
-    <div class="score" data-seat="0"><i></i><span class="name"></span><b class="points"></b></div>
-    <div class="score" data-seat="1"><i></i><span class="name"></span><b class="points"></b></div>
+    <div id="scores" class="scores"></div>
   </header>
 
   <div id="board" class="board"></div>
 
-  <section class="seat top">
-    <div id="top-label" class="seat-label"></div>
-    <div id="top-hand" class="hand hand-small"></div>
-  </section>
+  <section id="others" class="seat top"></section>
 
   <section id="center" class="center"></section>
 
@@ -170,8 +181,9 @@
     <ol class="rules">
       <li><b>The crib.</b> You are dealt six cards. Keep four and send two to the crib, an extra hand that belongs to the dealer.</li>
       <li><b>The starter.</b> One card is turned up and counts as part of every hand. If it is a Jack, the dealer scores 2.</li>
-      <li><b>The play.</b> Take turns laying cards and adding to a running count that may not pass 31. Score 2 for making 15 or 31, 2, 6 or 12 for a pair, three or four of a kind, and 1 per card for a run of three or more. If none of your cards fits, press Go: your opponent carries on, and the last card before the count resets scores 1.</li>
-      <li><b>The show.</b> Each hand is counted with the starter, the non-dealer first, then the dealer, then the crib. Every combination adding to 15 scores 2, each pair 2, each run 1 per card, a flush 4 or 5, and a Jack matching the starter's suit 1.</li>
+      <li><b>The play.</b> Take turns laying cards and adding to a running count that may not pass 31. Score 2 for making 15 or 31, 2, 6 or 12 for a pair, three or four of a kind, and 1 per card for a run of three or more. If none of your cards fits, press Go: the others carry on, and the last card before the count resets scores 1.</li>
+      <li><b>The show.</b> Each hand is counted with the starter, from the dealer's left round to the dealer, then the crib. Every combination adding to 15 scores 2, each pair 2, each run 1 per card, a flush 4 or 5, and a Jack matching the starter's suit 1.</li>
+      <li><b>Three or four players.</b> Each is dealt five cards and sends one to the crib; with three, one more card goes to the crib from the deck. Three play each for themselves, on a board with three lanes. Four play as two partnerships, players 1 and 3 against 2 and 4, each pair sharing a score.</li>
       <li><b>Winning.</b> The first peg to reach the last hole wins at once, even in the middle of a hand.</li>
     </ol>
     <p class="muted">Tap a card to choose it. During the play, tap it again or press Play. Tap anywhere to skip the deal, a count or a celebration. On a keyboard: 1–6 choose a card, Enter confirms, H asks for a hint and M mutes the sound.</p>

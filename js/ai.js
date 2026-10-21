@@ -1,8 +1,11 @@
-// Computer opponent and hints. Every function sees only what that seat could
-// know: its own cards, the starter and the cards already played.
+// Computer players and hints. Every function sees only what that seat could
+// know: its own cards, the starter and the cards already played. With two
+// players this is the full evaluator; with three or four the same ideas are
+// applied more simply.
 
 import { rank, suit, value, cardName, JACK } from './cards.js';
 import { rankPoints, handPoints, pegScore } from './scoring.js';
+import { sideOf } from './game.js';
 
 const choose = (n, k) => {
   let result = 1;
@@ -10,9 +13,14 @@ const choose = (n, k) => {
   return n < k ? 0 : result;
 };
 
-// The fifteen ways to split six cards into four kept and two thrown.
+// Every way to keep four cards: with six cards, the fifteen ways to throw
+// two; with five, the five ways to throw one.
 function splits(hand) {
   const result = [];
+  if (hand.length === 5) {
+    for (let i = 0; i < hand.length; i++) result.push({ toss: [hand[i]], keep: hand.filter((_, k) => k !== i) });
+    return result;
+  }
   for (let i = 0; i < hand.length; i++) {
     for (let j = i + 1; j < hand.length; j++) {
       result.push({ toss: [hand[i], hand[j]], keep: hand.filter((_, k) => k !== i && k !== j) });
@@ -66,20 +74,67 @@ function cribAverage(toss, hand) {
   return average;
 }
 
+// The same for one thrown card, with three or four players: the other three
+// crib cards and the starter are four draws from the 47 cards we cannot see.
+// Walks every combination of four ranks, weighted the same way.
+function cribAverageOfOne(card, hand) {
+  const rankLeft = new Array(13).fill(4);
+  const suitLeft = new Array(4).fill(13);
+  for (const c of hand) {
+    rankLeft[rank(c)]--;
+    suitLeft[suit(c)]--;
+  }
+  const counts = new Array(13).fill(0);
+  counts[rank(card)]++;
+
+  let total = 0;
+  const walk = (from, left, ways) => {
+    if (!left) {
+      total += ways * rankPoints(counts);
+      return;
+    }
+    for (let r = from; r < 13; r++) {
+      for (let k = 1; k <= left && k <= rankLeft[r]; k++) {
+        counts[r] += k;
+        walk(r + 1, left - k, ways * choose(rankLeft[r], k));
+        counts[r] -= k;
+      }
+    }
+  };
+  walk(0, 4, 1);
+  const draws = choose(47, 4);
+  let average = total / draws;
+
+  average += (5 * choose(suitLeft[suit(card)], 4)) / draws; // a five-card crib flush
+  for (let s = 0; s < 4; s++) {
+    const jack = s * 13 + JACK;
+    if (card === jack) average += suitLeft[s] / 47;
+    else if (!hand.includes(jack)) average += ((suitLeft[s] - 1) / 47) * (3 / 46);
+  }
+  return average;
+}
+
 // Every discard option, best first. `hand` is the average score of the kept
-// cards over all 46 possible starters; `crib` is the expected crib score.
-export function rateDiscards(hand, isDealer) {
+// cards over every possible starter; `crib` is the expected crib score,
+// which counts for us when our side owns the crib and against us when it
+// does not. With three players the crib goes to one rival only, so it
+// counts against us at half weight.
+export function rateDiscards(hand, ownCrib, players = 2) {
   const unseen = [];
   for (let c = 0; c < 52; c++) if (!hand.includes(c)) unseen.push(c);
+  const against = players === 3 ? -0.5 : -1;
 
   return splits(hand)
     .map(({ keep, toss }) => {
       const average = unseen.reduce((sum, starter) => sum + handPoints(keep, starter), 0) / unseen.length;
-      const crib = cribAverage(toss, hand);
-      return { keep, toss, now: handPoints(keep, null), hand: average, crib, value: average + (isDealer ? crib : -crib) };
+      const crib = toss.length === 2 ? cribAverage(toss, hand) : cribAverageOfOne(toss[0], hand);
+      return { keep, toss, now: handPoints(keep, null), hand: average, crib, value: average + (ownCrib ? crib : against * crib) };
     })
     .sort((a, b) => b.value - a.value);
 }
+
+const ownsCrib = (game, seat) => sideOf(game, game.dealer) === sideOf(game, seat);
+const levelOf = (game, seat) => game.players[seat]?.level ?? game.difficulty;
 
 // How the weaker levels fall short. `randomToss` is the chance of throwing two
 // cards without looking; otherwise they keep the four that seem to score most,
@@ -93,9 +148,9 @@ const LEVELS = {
 
 const pickAny = list => list[Math.floor(Math.random() * list.length)];
 
-export function pickDiscard(game, player, level = game.difficulty) {
+export function pickDiscard(game, player, level = levelOf(game, player)) {
   const hand = game.hands[player];
-  if (level === 'hard') return rateDiscards(hand, game.dealer === player)[0].toss;
+  if (level === 'hard') return rateDiscards(hand, ownsCrib(game, player), game.players.length)[0].toss;
 
   const { randomToss, tossNoise } = LEVELS[level] ?? LEVELS.medium;
   const options = splits(hand);
@@ -141,10 +196,22 @@ function soloPlay(hand, stack, count, card) {
   return points + soloBest(rest, next, total);
 }
 
+// The seat that will act after `player` lays a card: the next one round the
+// table holding cards that has not said go. Null when there is none but us.
+function nextToAct(game, player) {
+  const count = game.players.length;
+  for (let steps = 1; steps < count; steps++) {
+    const seat = (player + steps) % count;
+    if (game.hands[seat].length && !game.said[seat]) return seat;
+  }
+  return null;
+}
+
 // Every legal card, best first. A card is worth what it scores now, minus what
 // the opponent can be expected to score in reply, plus a share of what we
 // could then score back.
 export function ratePlays(game, player) {
+  if (game.players.length > 2) return ratePlaysAround(game, player);
   const hand = game.hands[player];
   const unseen = unseenCards(game, player);
   const opponentCards = game.hands[1 - player].length;
@@ -187,7 +254,42 @@ export function ratePlays(game, player) {
     .sort((a, b) => b.value - a.value);
 }
 
-export function pickPlay(game, player, level = game.difficulty) {
+// The same with three or four players, more simply: what a card scores now,
+// less what the next player can be expected to score in reply, or plus half
+// of it when the next player is our partner. Once everyone else is out of
+// cards, the best order for our own is searched as with two.
+function ratePlaysAround(game, player) {
+  const hand = game.hands[player];
+  const unseen = unseenCards(game, player);
+  const others = game.hands.reduce((sum, cards, seat) => sum + (seat === player ? 0 : cards.length), 0);
+  const next = nextToAct(game, player);
+
+  return hand
+    .filter(c => game.count + value(c) <= 31)
+    .map(card => {
+      const stack = [...game.stack, card];
+      const count = game.count + value(card);
+      const { points, items } = pegScore(stack);
+      let worth = points;
+
+      if (!others) {
+        worth = soloPlay(hand, game.stack, game.count, card);
+      } else if (count < 31 && next !== null) {
+        let reply = 0;
+        for (const answer of unseen) {
+          if (count + value(answer) <= 31) reply += pegScore([...stack, answer]).points;
+        }
+        const expected = (game.hands[next].length / unseen.length) * reply;
+        worth += sideOf(game, next) === sideOf(game, player) ? 0.5 * expected : -expected;
+      }
+
+      worth += value(card) * 0.01; // all else equal, shed high cards first
+      return { card, points, items, value: worth };
+    })
+    .sort((a, b) => b.value - a.value);
+}
+
+export function pickPlay(game, player, level = levelOf(game, player)) {
   if (level === 'hard') return ratePlays(game, player)[0].card;
 
   const legal = game.hands[player].filter(c => game.count + value(c) <= 31);
@@ -210,14 +312,15 @@ export function pickPlay(game, player, level = game.difficulty) {
 // opponent's evaluation, so the two never disagree.
 export function hint(game, player) {
   if (game.phase === 'discard') {
-    const isDealer = game.dealer === player;
-    const best = rateDiscards(game.hands[player], isDealer)[0];
+    const own = ownsCrib(game, player);
+    const best = rateDiscards(game.hands[player], own, game.players.length)[0];
+    const whose = game.dealer === player ? 'your' : own ? "your partner's" : 'their';
     return {
       cards: best.toss,
       text:
         `Throw ${best.toss.map(cardName).join(' and ')}. You keep ${best.now} ` +
         `(about ${best.hand.toFixed(1)} after the cut) and ` +
-        `${isDealer ? 'your' : 'their'} crib gains about ${best.crib.toFixed(1)}.`,
+        `${whose} crib gains about ${best.crib.toFixed(1)}.`,
     };
   }
 
